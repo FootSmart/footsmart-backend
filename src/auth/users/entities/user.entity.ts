@@ -33,11 +33,11 @@ export class User {
   @Column({ name: 'is_18_plus', default: false })
   is18Plus: boolean;
 
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  balance: number;
+
   @Column({ default: 'user' })
   role: string;
-
-  @Column({ name: 'kyc_status', default: 'not_started' })
-  kycStatus: string;
 
   @Column({ name: 'account_status', default: 'active' })
   accountStatus: string;

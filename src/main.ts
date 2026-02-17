@@ -7,7 +7,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Enable validation pipe globally
-  app.useGlobalPipes(new ValidationPipe());
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  );
+
+  // Enable CORS
+  app.enableCors();
 
   // Swagger Configuration
   const config = new DocumentBuilder()
@@ -22,7 +30,17 @@ async function bootstrap() {
     .addTag('Bets')
     .addTag('Wallet')
     .addTag('Analytics')
-    .addBearerAuth()
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'JWT',
+        description: 'Enter JWT token',
+        in: 'header',
+      },
+      'JWT-auth',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);

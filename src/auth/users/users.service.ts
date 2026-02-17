@@ -22,4 +22,8 @@ export class UsersService {
   async findById(id: string) {
     return this.usersRepository.findOne({ where: { id } });
   }
+
+  async updatePassword(id: string, passwordHash: string) {
+    return this.usersRepository.update({ id }, { passwordHash });
+  }
 }
