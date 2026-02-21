@@ -13,7 +13,7 @@ export class PasswordResetToken {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column('uuid')
+  @Column({ name: 'user_id', type: 'uuid' })
   userId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
@@ -23,7 +23,7 @@ export class PasswordResetToken {
   @Column({ unique: true })
   token: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ name: 'expiresAt', type: 'timestamp', nullable: true })
   expiresAt: Date;
 
   @Column({ default: false })

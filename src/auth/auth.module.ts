@@ -9,6 +9,8 @@ import { JwtStrategy } from './jwt.strategy';
 import { JwtGuard } from './jwt.guard';
 import { UsersModule } from './users/users.module';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
+import { EmailService } from './services/email.service';
+import { PasswordResetRateLimitGuard } from './guards/password-reset-rate-limit.guard';
 
 @Module({
   imports: [
@@ -25,7 +27,13 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
     UsersModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtGuard],
+  providers: [
+    AuthService, 
+    JwtStrategy, 
+    JwtGuard, 
+    EmailService,
+    PasswordResetRateLimitGuard,
+  ],
   exports: [AuthService, JwtGuard, JwtModule],
 })
 export class AuthModule {}

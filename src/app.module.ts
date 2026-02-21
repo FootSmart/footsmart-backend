@@ -26,7 +26,7 @@ import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
         type: 'postgres',
         url: configService.get<string>('DATABASE_URL'),
         autoLoadEntities: true,
-        synchronize: false, // NEVER true in production
+        synchronize: false, // Disabled - using manual table creation
       }),
     }),
 
