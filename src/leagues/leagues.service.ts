@@ -86,32 +86,36 @@ export class LeaguesService {
   /**
    * Get league standings by league ID
    * Joins standings with teams to get complete standing information
+   * Filters for the latest matchday to avoid duplicates
    * 
-   * Example query:
+   * Query logic:
+   * 1. Find MAX matchday for the league and season
+   * 2. Fetch standings WHERE matchday = MAX(matchday)
+   * 
+   * Example SQL equivalent:
    * SELECT
-   *   s.id,
    *   s.position,
+   *   t.name AS team,
+   *   t.logo,
    *   s.played,
    *   s.wins,
-   *   s.draws,
-   *   s.losses,
-   *   s.points,
-   *   s.goal_diff,
-   *   s.season,
-   *   t.id as team_id,
-   *   t.name as team_name,
-   *   t.logo as team_logo,
-   *   t.country as team_country,
-   *   l.id, l.name, l.country, l.season
+   *   s.points
    * FROM standings s
-   * INNER JOIN teams t ON s.team_id = t.id
-   * INNER JOIN leagues l ON s.league_id = l.id
+   * JOIN teams t ON t.id = s.team_id
+   * JOIN leagues l ON l.id = s.league_id
    * WHERE s.league_id = :leagueId
+   *   AND s.season = l.season
+   *   AND s.matchday = (
+   *     SELECT MAX(s2.matchday)
+   *     FROM standings s2
+   *     WHERE s2.league_id = l.id
+   *       AND s2.season = l.season
+   *   )
    * ORDER BY s.position ASC
    */
   async getLeagueStandings(leagueId: string): Promise<LeagueStandingsDto> {
     try {
-      // First, verify league exists
+      // First, verify league exists and get its details
       const { data: leagueData, error: leagueError } = await this.scrapfootDb
         .from('leagues')
         .select('id, name, country, season')
@@ -126,8 +130,39 @@ export class LeaguesService {
 
       console.log(`Fetching standings for ${leagueData.name} (Season: ${leagueData.season})`);
 
-      // Fetch standings with team information using join
-      // Filter by BOTH league_id AND season to avoid getting historical data
+      // Find the maximum (latest) matchday for this league and season
+      const { data: maxMatchdayData, error: maxMatchdayError } = await this.scrapfootDb
+        .from('standings')
+        .select('matchday')
+        .eq('league_id', leagueId)
+        .eq('season', leagueData.season)
+        .order('matchday', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (maxMatchdayError && maxMatchdayError.code !== 'PGRST116') {
+        // PGRST116 is "no rows returned", which is acceptable
+        throw new InternalServerErrorException(
+          `Failed to fetch max matchday: ${maxMatchdayError.message}`,
+        );
+      }
+
+      const latestMatchday = maxMatchdayData?.matchday;
+      console.log(`Latest matchday: ${latestMatchday}`);
+
+      if (latestMatchday === null || latestMatchday === undefined) {
+        console.log('No matchday data available for this league');
+        return {
+          id: leagueData.id,
+          name: leagueData.name,
+          country: leagueData.country,
+          season: leagueData.season,
+          standings: [],
+        };
+      }
+
+      // Fetch standings for the latest matchday only with team information
+      // This ensures no duplicate teams
       const { data: standingsData, error: standingsError } = await this.scrapfootDb
         .from('standings')
         .select(
@@ -154,7 +189,8 @@ export class LeaguesService {
         `,
         )
         .eq('league_id', leagueId)
-        .eq('season', leagueData.season) // Filter by current season
+        .eq('season', leagueData.season)
+        .eq('matchday', latestMatchday) // Filter by latest matchday
         .order('position', { ascending: true });
 
       if (standingsError) {
@@ -163,7 +199,7 @@ export class LeaguesService {
         );
       }
 
-      console.log(`Found ${standingsData?.length || 0} teams in standings`);
+      console.log(`Found ${standingsData?.length || 0} teams in standings for matchday ${latestMatchday}`);
 
       // Transform the response to match StandingDto format
       const standings: StandingDto[] = (standingsData || []).map(
