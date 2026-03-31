@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TeamDto, TeamWithPlayersDto, TeamStatsDto } from './dto/team.dto';
-import { PlayerDto } from './dto/player.dto';
+import { PlayerDto, PlayerStatsDto } from './dto/player.dto';
 
 const TEAM_SELECT = `
   id,
@@ -35,6 +35,7 @@ const PLAYER_SELECT = `
   height_cm,
   weight_kg,
   shirt_number,
+  photo_url,
   appearances,
   minutes_played,
   goals,
@@ -85,6 +86,7 @@ export class TeamsService {
       heightCm: p.height_cm,
       weightKg: p.weight_kg,
       shirtNumber: p.shirt_number,
+      photoUrl: p.photo_url,
       appearances: p.appearances ?? 0,
       minutesPlayed: p.minutes_played ?? 0,
       goals: p.goals ?? 0,
@@ -94,6 +96,29 @@ export class TeamsService {
       isActive: p.is_active ?? true,
       createdAt: p.created_at,
       updatedAt: p.updated_at,
+    };
+  }
+
+  private mapPlayerStats(s: any): PlayerStatsDto {
+    return {
+      playerId: s.player_id,
+      playerName: s.player_name,
+      position: s.position,
+      nationality: s.nationality,
+      age: s.age,
+      shirtNumber: s.shirt_number,
+      teamName: s.team_name,
+      league: s.league,
+      season: s.season,
+      appearances: s.appearances ?? 0,
+      minutesPlayed: s.minutes_played ?? 0,
+      goals: s.goals ?? 0,
+      assists: s.assists ?? 0,
+      goalContributions: s.goal_contributions ?? 0,
+      yellowCards: s.yellow_cards ?? 0,
+      redCards: s.red_cards ?? 0,
+      goalsPerGame: parseFloat(s.goals_per_game) || 0,
+      goalsPer90: parseFloat(s.goals_per_90) || 0,
     };
   }
 
@@ -218,5 +243,19 @@ export class TeamsService {
     if (error) throw new InternalServerErrorException(`Failed to fetch scorers: ${error.message}`);
 
     return (data || []).map(this.mapPlayer.bind(this));
+  }
+
+  /**
+   * GET /teams/players/:playerId/stats – Detailed stats from v_player_stats view
+   */
+  async getPlayerStats(playerId: string): Promise<PlayerStatsDto> {
+    const { data, error } = await this.db
+      .from('v_player_stats')
+      .select('*')
+      .eq('player_id', playerId)
+      .single();
+
+    if (error || !data) throw new NotFoundException(`No stats found for player ${playerId}`);
+    return this.mapPlayerStats(data);
   }
 }

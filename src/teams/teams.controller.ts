@@ -9,7 +9,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { TeamsService } from './teams.service';
 import { TeamDto, TeamWithPlayersDto, TeamStatsDto } from './dto/team.dto';
-import { PlayerDto } from './dto/player.dto';
+import { PlayerDto, PlayerStatsDto } from './dto/player.dto';
 
 @Controller('teams')
 @ApiTags('Teams')
@@ -42,6 +42,19 @@ export class TeamsController {
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 10,
   ): Promise<PlayerDto[]> {
     return this.teamsService.getLeagueTopScorers(leagueId, limit);
+  }
+
+  /**
+   * GET /teams/players/:playerId/stats
+   * Detailed player statistics from v_player_stats view
+   */
+  @Get('players/:playerId/stats')
+  @ApiParam({ name: 'playerId', description: 'Player UUID' })
+  @ApiOperation({ summary: 'Player detailed stats', description: 'Full stats including goals per game, goals per 90, goal contributions from v_player_stats view' })
+  @ApiResponse({ status: 200, type: PlayerStatsDto })
+  @ApiResponse({ status: 404, description: 'Player stats not found' })
+  async getPlayerStats(@Param('playerId') playerId: string): Promise<PlayerStatsDto> {
+    return this.teamsService.getPlayerStats(playerId);
   }
 
   /**

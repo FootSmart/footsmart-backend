@@ -11,6 +11,7 @@ import { LeaguesModule } from './leagues/leagues.module';
 import { MatchesModule } from './matches/matches.module';
 import { TeamsModule } from './teams/teams.module';
 import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
+import { BetsModule } from './bets/bets.module';
 
 @Module({
   imports: [
@@ -22,12 +23,20 @@ import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
     // Database connection
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        url: configService.get<string>('DATABASE_URL'),
-        autoLoadEntities: true,
-        synchronize: false, // Disabled - using manual table creation
-      }),
+      useFactory: (configService: ConfigService) => {
+        const databaseUrl = configService.get<string>('SCRAPFOOT_DATABASE_URL');
+
+        if (!databaseUrl) {
+          throw new Error('SCRAPFOOT_DATABASE_URL environment variable is not set');
+        }
+
+        return {
+          type: 'postgres' as const,
+          url: databaseUrl,
+          autoLoadEntities: true,
+          synchronize: false, // Disabled - using manual table creation
+        };
+      },
     }),
 
     PassportModule,
@@ -37,6 +46,7 @@ import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
     LeaguesModule,
     MatchesModule,
     TeamsModule,
+    BetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

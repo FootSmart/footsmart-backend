@@ -79,7 +79,7 @@ export class AuthService {
     // Hash password
     const passwordHash = await bcrypt.hash(registerDto.password, 10);
 
-    // Create user in database with all required fields
+    // Create user in database with all fields from DTO
     const user = await this.usersService.create({
       email: registerDto.email,
       passwordHash,
@@ -87,7 +87,12 @@ export class AuthService {
       dateOfBirth: new Date(registerDto.dateOfBirth),
       is18Plus: true,
       role: registerDto.role,
+      country: registerDto.country,
+      club: registerDto.club,
+      avatarUrl: registerDto.avatarUrl,
+      kycStatus: 'not_started',
       accountStatus: 'active',
+      balance: 0,
     });
 
     // Return JWT token

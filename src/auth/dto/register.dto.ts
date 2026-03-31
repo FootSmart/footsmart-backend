@@ -7,6 +7,7 @@ import {
   MaxLength,
   IsDateString,
   IsNotEmpty,
+  IsOptional,
 } from 'class-validator';
 
 export enum PublicRole {
@@ -62,4 +63,31 @@ export class RegisterDto {
   })
   @IsNotEmpty({ message: 'Role is required' })
   role: PublicRole;
+
+  @ApiProperty({
+    example: 'Nigeria',
+    description: 'User country',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  country?: string;
+
+  @ApiProperty({
+    example: 'Manchester United',
+    description: 'User club or team',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  club?: string;
+
+  @ApiProperty({
+    example: 'https://example.com/avatar.jpg',
+    description: 'Avatar URL',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  avatarUrl?: string;
 }

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -22,6 +22,7 @@ export class AuthController {
   }
 
   @Post('register')
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'User registration' })
   @ApiBody({ type: RegisterDto })
   @ApiResponse({ status: 201, description: 'User registered successfully' })

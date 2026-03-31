@@ -6,6 +6,9 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Prefix all REST routes with /api (e.g. /api/auth/login)
+  app.setGlobalPrefix('api');
+
   // Enable validation pipe globally
   app.useGlobalPipes(
     new ValidationPipe({

@@ -148,18 +148,83 @@ export class MatchesService {
   /**
    * GET /matches/upcoming – next N fixtures, ordered earliest first
    */
-  async getUpcomingMatches(limit = 20, leagueId?: string): Promise<MatchListResponseDto> {
+  async getUpcomingMatches(
+    limit = 20,
+    leagueId?: string,
+    nextGameweek = false,
+  ): Promise<MatchListResponseDto> {
     const now = new Date().toISOString();
+
+    if (!nextGameweek) {
+      let query = this.db
+        .from('matches')
+        .select(MATCH_SELECT, { count: 'exact' })
+        .eq('status', 'scheduled')
+        .gte('match_date', now)
+        .order('match_date', { ascending: true })
+        .limit(limit);
+
+      if (leagueId) query = query.eq('league_id', leagueId);
+
+      const { data, error, count } = await query;
+      if (error) throw new InternalServerErrorException(`Failed to fetch upcoming matches: ${error.message}`);
+
+      return {
+        matches: (data || []).map((m) => this.mapMatch(m)),
+        total: count ?? 0,
+        limit,
+        offset: 0,
+      };
+    }
+
+    let anchorQuery = this.db
+      .from('matches')
+      .select('match_date, matchday')
+      .eq('status', 'scheduled')
+      .gte('match_date', now)
+      .order('match_date', { ascending: true })
+      .limit(1);
+
+    if (leagueId) anchorQuery = anchorQuery.eq('league_id', leagueId);
+
+    const { data: anchorData, error: anchorError } = await anchorQuery;
+    if (anchorError) {
+      throw new InternalServerErrorException(
+        `Failed to fetch next gameweek anchor: ${anchorError.message}`,
+      );
+    }
+
+    const anchor = anchorData?.[0];
+    if (!anchor) {
+      return {
+        matches: [],
+        total: 0,
+        limit,
+        offset: 0,
+      };
+    }
 
     let query = this.db
       .from('matches')
       .select(MATCH_SELECT, { count: 'exact' })
       .eq('status', 'scheduled')
-      .gte('match_date', now)
       .order('match_date', { ascending: true })
       .limit(limit);
 
     if (leagueId) query = query.eq('league_id', leagueId);
+
+    const anchorDate = new Date(anchor.match_date);
+    const windowEnd = new Date(anchorDate);
+    windowEnd.setDate(windowEnd.getDate() + 6);
+
+    // For league-specific queries, matchday is the strongest gameweek signal.
+    if (leagueId && anchor.matchday != null) {
+      query = query.eq('matchday', anchor.matchday).gte('match_date', now);
+    } else {
+      query = query
+        .gte('match_date', anchorDate.toISOString())
+        .lte('match_date', windowEnd.toISOString());
+    }
 
     const { data, error, count } = await query;
     if (error) throw new InternalServerErrorException(`Failed to fetch upcoming matches: ${error.message}`);

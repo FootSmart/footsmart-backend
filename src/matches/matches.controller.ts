@@ -46,12 +46,23 @@ export class MatchesController {
   @ApiOperation({ summary: 'Upcoming fixtures', description: 'Next N scheduled matches, earliest first' })
   @ApiQuery({ name: 'limit', required: false, example: 20 })
   @ApiQuery({ name: 'leagueId', required: false })
+  @ApiQuery({
+    name: 'nextGameweek',
+    required: false,
+    example: 'true',
+    description: 'If true, returns only fixtures from the next gameweek window',
+  })
   @ApiResponse({ status: 200, type: MatchListResponseDto })
   async getUpcomingMatches(
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
     @Query('leagueId') leagueId?: string,
+    @Query('nextGameweek') nextGameweek?: string,
   ): Promise<MatchListResponseDto> {
-    return this.matchesService.getUpcomingMatches(limit, leagueId);
+    return this.matchesService.getUpcomingMatches(
+      limit,
+      leagueId,
+      nextGameweek === 'true',
+    );
   }
 
   /**
