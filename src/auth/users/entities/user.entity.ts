@@ -48,6 +48,10 @@ export class User {
   @Column({ nullable: true })
   club?: string;
 
+  // Stripe (optionnel) — utilisé pour sauvegarder des moyens de paiement
+  @Column({ name: 'stripe_customer_id', nullable: true })
+  stripeCustomerId?: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

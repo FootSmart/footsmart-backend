@@ -245,4 +245,69 @@ export class WalletService {
       return transaction;
     });
   }
+
+  /**
+   * Crédite le portefeuille après un paiement Stripe (webhook idempotent).
+   */
+  async depositFromStripe(
+    userId: string,
+    amount: number,
+    stripePaymentIntentId: string,
+  ) {
+    if (amount <= 0) {
+      throw new BadRequestException('Amount must be positive');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const existing = await manager.findOne(WalletTransaction, {
+        where: { stripePaymentIntentId },
+      });
+      if (existing) {
+        return {
+          success: true,
+          duplicate: true,
+          transaction: null,
+        };
+      }
+
+      const user = await manager
+        .createQueryBuilder(User, 'user')
+        .where('user.id = :userId', { userId })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const balanceBefore = user.balance || 0;
+      const balanceAfter = Number(
+        (Number(balanceBefore) + Number(amount)).toFixed(2),
+      );
+
+      user.balance = balanceAfter;
+      await manager.save(User, user);
+
+      const transaction = manager.create(WalletTransaction, {
+        userId,
+        type: TransactionType.DEPOSIT,
+        amount,
+        stripePaymentIntentId,
+      });
+
+      await manager.save(WalletTransaction, transaction);
+
+      return {
+        success: true,
+        duplicate: false,
+        transaction: {
+          id: transaction.id,
+          type: transaction.type,
+          amount: transaction.amount,
+          newBalance: balanceAfter,
+          createdAt: transaction.createdAt,
+        },
+      };
+    });
+  }
 }

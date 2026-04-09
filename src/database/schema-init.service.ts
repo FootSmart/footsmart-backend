@@ -18,6 +18,7 @@ export class SchemaInitService implements OnModuleInit {
 
     await this.ensureWalletTransactionsSchema();
     await this.ensureBetsSchema();
+    await this.ensureStripeColumnsSchema();
   }
 
   private async ensureWalletTransactionsSchema() {
@@ -142,6 +143,28 @@ CREATE INDEX IF NOT EXISTS "IDX_bets_user_id_created_at"
       `);
 
       this.logger.log('bets: créée');
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /** Colonnes Stripe (users / wallet_transactions) — sans toucher au reste du schéma */
+  private async ensureStripeColumnsSchema() {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query(`
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "stripe_customer_id" character varying(255) NULL;
+      `);
+      await runner.query(`
+        ALTER TABLE "wallet_transactions" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" character varying(255) NULL;
+      `);
+      await runner.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS "UQ_wallet_transactions_stripe_pi"
+        ON "wallet_transactions" ("stripe_payment_intent_id")
+        WHERE "stripe_payment_intent_id" IS NOT NULL;
+      `);
+      this.logger.log('Stripe DB columns: OK');
     } finally {
       await runner.release();
     }

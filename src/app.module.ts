@@ -12,6 +12,7 @@ import { MatchesModule } from './matches/matches.module';
 import { TeamsModule } from './teams/teams.module';
 import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
 import { BetsModule } from './bets/bets.module';
+import { PaymentsModule } from './payments/payments.module';
 import { SchemaInitService } from './database/schema-init.service';
 
 @Module({
@@ -67,6 +68,7 @@ import { SchemaInitService } from './database/schema-init.service';
     MatchesModule,
     TeamsModule,
     BetsModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SchemaInitService],

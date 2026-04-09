@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import * as net from 'node:net';
 import * as express from 'express';
@@ -37,7 +38,8 @@ async function findAvailablePort(
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody est nécessaire pour vérifier la signature Stripe sur les webhooks
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   // Prefix all REST routes with /api (e.g. /api/auth/login)
   app.setGlobalPrefix('api');
@@ -68,6 +70,7 @@ async function bootstrap() {
     .addTag('Predictions')
     .addTag('Bets')
     .addTag('Wallet')
+    .addTag('Payments')
     .addTag('Analytics')
     .addBearerAuth(
       {
