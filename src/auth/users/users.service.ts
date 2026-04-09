@@ -36,7 +36,21 @@ export class UsersService {
     if (updates.country !== undefined) payload.country = updates.country;
     if (updates.avatarUrl !== undefined) payload.avatarUrl = updates.avatarUrl;
     if (updates.club !== undefined) payload.club = updates.club;
-    if (updates.dateOfBirth !== undefined) payload.dateOfBirth = new Date(updates.dateOfBirth);
+    if (updates.dateOfBirth !== undefined) {
+      const raw = updates.dateOfBirth.trim();
+      if (raw.length > 0) {
+        // Accepte YYYY-MM-DD (ISO) et DD-MM-YYYY (UI actuelle)
+        const ddmmyyyy = raw.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        const normalized = ddmmyyyy
+          ? `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`
+          : raw;
+
+        const d = new Date(normalized);
+        if (!Number.isNaN(d.getTime())) {
+          payload.dateOfBirth = d;
+        }
+      }
+    }
 
     await this.usersRepository.update({ id }, payload);
     return this.findById(id);

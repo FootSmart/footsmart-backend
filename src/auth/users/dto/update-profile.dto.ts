@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @ApiPropertyOptional({ example: 'John Doe' })
@@ -20,7 +20,7 @@ export class UpdateProfileDto {
   country?: string;
 
   @ApiPropertyOptional({ example: '2000-01-01' })
-  @IsDateString()
+  @IsString()
   @IsOptional()
   dateOfBirth?: string;
 

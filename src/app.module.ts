@@ -12,6 +12,7 @@ import { MatchesModule } from './matches/matches.module';
 import { TeamsModule } from './teams/teams.module';
 import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
 import { BetsModule } from './bets/bets.module';
+import { SchemaInitService } from './database/schema-init.service';
 
 @Module({
   imports: [
@@ -30,11 +31,30 @@ import { BetsModule } from './bets/bets.module';
           throw new Error('SCRAPFOOT_DATABASE_URL environment variable is not set');
         }
 
+        const typeOrmSync = configService.get<string>('TYPEORM_SYNC');
+        const synchronize =
+          typeOrmSync === 'true' || typeOrmSync === '1';
+
+        const sslEnabledRaw = configService.get<string>('SCRAPFOOT_DATABASE_SSL');
+        const sslEnabled =
+          sslEnabledRaw === undefined ||
+          sslEnabledRaw === '' ||
+          sslEnabledRaw === 'true' ||
+          sslEnabledRaw === '1';
+
         return {
           type: 'postgres' as const,
           url: databaseUrl,
           autoLoadEntities: true,
-          synchronize: false, // Disabled - using manual table creation
+          // En prod: TYPEORM_SYNC=false + migrations / scripts SQL
+          synchronize,
+          ...(sslEnabled
+            ? {
+                ssl: {
+                  rejectUnauthorized: false,
+                },
+              }
+            : {}),
         };
       },
     }),
@@ -49,7 +69,7 @@ import { BetsModule } from './bets/bets.module';
     BetsModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, SchemaInitService],
 })
 export class AppModule {}
 

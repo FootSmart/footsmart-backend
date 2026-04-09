@@ -2,6 +2,39 @@ import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import * as net from 'node:net';
+import * as express from 'express';
+import { join } from 'node:path';
+
+async function canListen(host: string, port: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const server = net.createServer();
+
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+
+    server.listen(port, host);
+  });
+}
+
+async function findAvailablePort(
+  host: string,
+  startPort: number,
+  maxAttempts: number,
+): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await canListen(host, port);
+    if (ok) return port;
+  }
+
+  throw new Error(
+    `Aucun port libre trouvé entre ${startPort} et ${startPort + maxAttempts - 1}.`,
+  );
+}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -19,6 +52,9 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors();
+
+  // Static files for uploaded avatars
+  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
   // Swagger Configuration
   const config = new DocumentBuilder()
@@ -49,9 +85,17 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  const port = process.env.PORT ?? 3001;
-  await app.listen(port, '0.0.0.0');
+  const host = '0.0.0.0';
+  const requestedPort = Number(process.env.PORT ?? 3001);
+  const maxAttempts = 50;
+
+  const port = await findAvailablePort(host, requestedPort, maxAttempts);
+
+  await app.listen(port, host);
   console.log(`🚀 Application is running on: http://0.0.0.0:${port}/api`);
   console.log(`📱 Access from emulator: http://10.0.2.2:${port}/api`);
+  if (port !== requestedPort) {
+    console.log(`⚠️  Port ${requestedPort} occupé, démarré sur ${port} à la place.`);
+  }
 }
 bootstrap();
