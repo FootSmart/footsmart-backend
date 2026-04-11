@@ -14,6 +14,7 @@ import { TeamsModule } from './teams/teams.module';
 import { ScrapfootModule } from './scrapfoot/scrapfoot.module';
 import { BetsModule } from './bets/bets.module';
 import { PaymentsModule } from './payments/payments.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { SchemaInitService } from './database/schema-init.service';
 
 @Module({
@@ -74,6 +75,7 @@ import { SchemaInitService } from './database/schema-init.service';
     TeamsModule,
     BetsModule,
     PaymentsModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService, SchemaInitService],
