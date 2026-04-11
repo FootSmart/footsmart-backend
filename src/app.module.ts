@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PassportModule } from '@nestjs/passport';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -29,14 +30,17 @@ import { SchemaInitService } from './database/schema-init.service';
         const databaseUrl = configService.get<string>('SCRAPFOOT_DATABASE_URL');
 
         if (!databaseUrl) {
-          throw new Error('SCRAPFOOT_DATABASE_URL environment variable is not set');
+          throw new Error(
+            'SCRAPFOOT_DATABASE_URL environment variable is not set',
+          );
         }
 
         const typeOrmSync = configService.get<string>('TYPEORM_SYNC');
-        const synchronize =
-          typeOrmSync === 'true' || typeOrmSync === '1';
+        const synchronize = typeOrmSync === 'true' || typeOrmSync === '1';
 
-        const sslEnabledRaw = configService.get<string>('SCRAPFOOT_DATABASE_SSL');
+        const sslEnabledRaw = configService.get<string>(
+          'SCRAPFOOT_DATABASE_SSL',
+        );
         const sslEnabled =
           sslEnabledRaw === undefined ||
           sslEnabledRaw === '' ||
@@ -60,6 +64,7 @@ import { SchemaInitService } from './database/schema-init.service';
       },
     }),
 
+    ScheduleModule.forRoot(),
     PassportModule,
     AuthModule,
     WalletModule,
@@ -74,4 +79,3 @@ import { SchemaInitService } from './database/schema-init.service';
   providers: [AppService, SchemaInitService],
 })
 export class AppModule {}
-
