@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Headers,
   Post,
   Req,
@@ -25,6 +26,50 @@ export class PaymentsController {
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     private readonly walletService: WalletService,
   ) {}
+
+  @Get('stripe/payment-methods')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Lister les cartes Stripe du client',
+    description:
+      'Retourne les cartes enregistrées sur le customer Stripe (last4, marque, expiration).',
+  })
+  async listStripePaymentMethods(@Req() req: any) {
+    const stripe = this.stripeService.getStripe();
+    const userId = req.user.id as string;
+
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user?.stripeCustomerId) {
+      return { paymentMethods: [] as unknown[] };
+    }
+
+    const list = await stripe.paymentMethods.list({
+      customer: user.stripeCustomerId,
+      type: 'card',
+    });
+
+    const paymentMethods = list.data.map((pm: any, index: number) => {
+      const card = pm.card;
+      const brandRaw = (card?.brand as string | undefined) ?? 'card';
+      const brand =
+        brandRaw.length > 0
+          ? brandRaw.charAt(0).toUpperCase() + brandRaw.slice(1)
+          : 'Card';
+
+      return {
+        id: pm.id as string,
+        brand,
+        last4: (card?.last4 as string) ?? '',
+        expMonth: card?.exp_month as number | undefined,
+        expYear: card?.exp_year as number | undefined,
+        holder: (pm.billing_details?.name as string | undefined) ?? '',
+        isDefault: index === 0,
+      };
+    });
+
+    return { paymentMethods };
+  }
 
   @Post('stripe/setup-intent')
   @UseGuards(JwtGuard)
