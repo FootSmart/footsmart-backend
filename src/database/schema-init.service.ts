@@ -12,6 +12,9 @@ export class SchemaInitService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    // Toujours : colonne users.balance (sinon GET /wallet/* → 500 si la table users existe sans cette colonne)
+    await this.ensureUsersBalanceColumn();
+
     const enabledRaw = this.configService.get<string>('AUTO_CREATE_SCHEMA');
     const enabled = enabledRaw === 'true' || enabledRaw === '1';
     if (!enabled) return;
@@ -19,6 +22,24 @@ export class SchemaInitService implements OnModuleInit {
     await this.ensureWalletTransactionsSchema();
     await this.ensureBetsSchema();
     await this.ensureStripeColumnsSchema();
+  }
+
+  /** Idempotent — nécessaire pour le portefeuille (TypeORM lit users.balance). */
+  private async ensureUsersBalanceColumn() {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query(`
+        ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "balance" numeric(12, 2) NOT NULL DEFAULT 0;
+      `);
+      this.logger.log('users.balance: OK');
+    } catch (e) {
+      this.logger.warn(
+        `users.balance: impossible d'ajouter la colonne (${(e as Error).message}). Vérifie les droits DB.`,
+      );
+    } finally {
+      await runner.release();
+    }
   }
 
   private async ensureWalletTransactionsSchema() {

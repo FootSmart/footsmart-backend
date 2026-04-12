@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailService } from './services/email.service';
 import { PasswordResetRateLimitGuard } from './guards/password-reset-rate-limit.guard';
+import { getJwtExpiresIn, getJwtSecret } from './jwt-config.helper';
 
 @Module({
   imports: [
@@ -20,8 +21,8 @@ import { PasswordResetRateLimitGuard } from './guards/password-reset-rate-limit.
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'your_secret_key',
-        signOptions: { expiresIn: '1h' },
+        secret: getJwtSecret(configService),
+        signOptions: { expiresIn: getJwtExpiresIn(configService) },
       }),
     }),
     UsersModule,

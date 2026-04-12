@@ -7,6 +7,7 @@ import {
   Request,
   Query,
   ParseIntPipe,
+  DefaultValuePipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -83,8 +84,8 @@ export class WalletController {
   })
   async getTransactions(
     @Request() req: any,
-    @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 50,
-    @Query('offset', new ParseIntPipe({ optional: true })) offset: number = 0,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
   ) {
     return this.walletService.getTransactions(req.user.id, limit, offset);
   }

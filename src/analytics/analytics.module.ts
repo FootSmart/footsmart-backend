@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsController } from './analytics.controller';
 import { Bet } from '../bets/entities/bet.entity';
@@ -9,6 +10,7 @@ import { ScrapfootModule } from '../scrapfoot/scrapfoot.module';
 
 @Module({
   imports: [
+    ConfigModule,
     TypeOrmModule.forFeature([Bet, User, WalletTransaction]),
     ScrapfootModule,
   ],

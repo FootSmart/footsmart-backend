@@ -22,6 +22,7 @@ export class WalletService {
   async getBalance(userId: string) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
+      select: ['id', 'balance'],
     });
 
     if (!user) {
@@ -29,7 +30,7 @@ export class WalletService {
     }
 
     return {
-      balance: user.balance || 0,
+      balance: Number(user.balance ?? 0),
       currency: 'USD',
     };
   }
@@ -38,12 +39,27 @@ export class WalletService {
    * Get all transactions for a user
    */
   async getTransactions(userId: string, limit = 50, offset = 0) {
-    const [transactions, total] = await this.walletTransactionRepository.findAndCount({
+    const [rows, total] = await this.walletTransactionRepository.findAndCount({
       where: { userId },
+      select: {
+        id: true,
+        userId: true,
+        type: true,
+        amount: true,
+        createdAt: true,
+      },
       order: { createdAt: 'DESC' },
       take: limit,
       skip: offset,
     });
+
+    const transactions = rows.map((t) => ({
+      id: t.id,
+      userId: t.userId,
+      type: t.type,
+      amount: Number(t.amount),
+      createdAt: t.createdAt,
+    }));
 
     return {
       transactions,

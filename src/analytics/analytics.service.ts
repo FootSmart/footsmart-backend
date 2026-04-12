@@ -2,19 +2,18 @@ import {
   Injectable,
   Inject,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Bet, BetStatus, BetSelection } from '../bets/entities/bet.entity';
 import { User } from '../auth/users/entities/user.entity';
 import { WalletTransaction } from '../wallet/entities/wallet-transaction.entity';
 
-/** Jointure Supabase : match_odds + matches!inner + leagues!inner
- *  Supabase retourne les relations comme des tableaux (même pour .single()),
- *  on accède donc à [0] sur chaque relation imbriquée.
- */
-interface OddsRow {
+/** Ligne match_odds (sans embed — la FK match_odds→matches peut être absente côté Supabase). */
+interface MatchOddsFlat {
   match_id: unknown;
   home_team: unknown;
   away_team: unknown;
@@ -24,12 +23,6 @@ interface OddsRow {
   home_prob: unknown;
   draw_prob: unknown;
   away_prob: unknown;
-  matches: Array<{
-    match_date: unknown;
-    status: unknown;
-    league_id: unknown;
-    leagues: Array<{ name: unknown }>;
-  }>;
 }
 
 /** Jointure Supabase : matches + home_team + away_team + leagues */
@@ -48,6 +41,11 @@ interface MatchRow {
 
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
+  /** URL de l'API Python ML — définie dans .env via ML_API_URL */
+  private readonly mlApiUrl: string;
+
   constructor(
     @Inject('SCRAPFOOT_DB_CLIENT')
     private readonly db: SupabaseClient,
@@ -57,7 +55,12 @@ export class AnalyticsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(WalletTransaction)
     private readonly walletTransactionRepository: Repository<WalletTransaction>,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    // Par défaut : http://localhost:8000 (l'API Python tourne en local)
+    this.mlApiUrl =
+      this.configService.get<string>('ML_API_URL') ?? 'http://localhost:8000';
+  }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -73,6 +76,83 @@ export class AnalyticsService {
 
   private round2(n: number): number {
     return Math.round(n * 100) / 100;
+  }
+
+  /** PostgREST embed match_odds→matches exige une FK ; sinon on joint en mémoire. */
+  private leagueNameFromMatch(leagues: unknown): string | null {
+    if (!leagues) return null;
+    if (Array.isArray(leagues)) {
+      const first = leagues[0] as { name?: unknown } | undefined;
+      return first?.name != null ? String(first.name) : null;
+    }
+    const o = leagues as { name?: unknown };
+    return o.name != null ? String(o.name) : null;
+  }
+
+  private async fetchScheduledMatchesOrdered(
+    leagueId: string | undefined,
+    scanLimit: number,
+  ): Promise<
+    Array<{
+      id: unknown;
+      match_date: unknown;
+      league_id: unknown;
+      leagues: unknown;
+    }>
+  > {
+    let q = this.db
+      .from('matches')
+      .select('id, match_date, league_id, leagues(name)')
+      .eq('status', 'scheduled')
+      .order('match_date', { ascending: true })
+      .limit(scanLimit);
+
+    if (leagueId) {
+      q = q.eq('league_id', leagueId);
+    }
+
+    const { data, error } = await q;
+
+    if (error) {
+      throw new InternalServerErrorException(
+        `Failed to fetch scheduled matches: ${error.message}`,
+      );
+    }
+
+    return (data ?? []) as Array<{
+      id: unknown;
+      match_date: unknown;
+      league_id: unknown;
+      leagues: unknown;
+    }>;
+  }
+
+  private async fetchMatchOddsMap(
+    matchIds: string[],
+  ): Promise<Map<string, MatchOddsFlat>> {
+    const map = new Map<string, MatchOddsFlat>();
+    if (matchIds.length === 0) return map;
+
+    const { data, error } = await this.db
+      .from('match_odds')
+      .select(
+        `match_id, home_team, away_team,
+         home_odds, draw_odds, away_odds,
+         home_prob, draw_prob, away_prob`,
+      )
+      .in('match_id', matchIds);
+
+    if (error) {
+      throw new InternalServerErrorException(
+        `Failed to fetch match_odds: ${error.message}`,
+      );
+    }
+
+    for (const row of data ?? []) {
+      const r = row as MatchOddsFlat;
+      map.set(String(r.match_id), r);
+    }
+    return map;
   }
 
   // ─── A) User Stats ────────────────────────────────────────────────────────
@@ -347,102 +427,214 @@ export class AnalyticsService {
   // ─── C) Market Movements ─────────────────────────────────────────────────
 
   async getMarketMovements(leagueId?: string) {
-    let query = this.db
-      .from('match_odds')
-      .select(
-        `match_id, home_team, away_team,
-         home_odds, draw_odds, away_odds,
-         home_prob, draw_prob, away_prob,
-         matches!inner(match_date, status, league_id,
-           leagues!inner(name))`,
-      )
-      .eq('matches.status', 'scheduled')
-      .order('matches.match_date', { ascending: true })
-      .limit(20);
+    const matches = await this.fetchScheduledMatchesOrdered(leagueId, 200);
+    const ids = matches.map((m) => String(m.id));
+    const oddsMap = await this.fetchMatchOddsMap(ids);
 
-    if (leagueId) {
-      query = query.eq('matches.league_id', leagueId);
+    const rows: Array<{
+      odds: MatchOddsFlat;
+      match_date: unknown;
+      league_id: unknown;
+      leagueName: string | null;
+    }> = [];
+
+    for (const m of matches) {
+      if (rows.length >= 20) break;
+      const odds = oddsMap.get(String(m.id));
+      if (!odds) continue;
+      rows.push({
+        odds,
+        match_date: m.match_date,
+        league_id: m.league_id,
+        leagueName: this.leagueNameFromMatch(m.leagues),
+      });
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      throw new InternalServerErrorException(
-        `Failed to fetch market movements: ${error.message}`,
-      );
-    }
-
-    return (data || []).map((row) => {
-      const homeProb = this.toNum(row.home_prob);
-      const awayProb = this.toNum(row.away_prob);
+    return rows.map(({ odds, match_date, league_id, leagueName }) => {
+      const homeProb = this.toNum(odds.home_prob);
+      const awayProb = this.toNum(odds.away_prob);
 
       let valueLabel: string | null = null;
       if (homeProb > 0.6) {
-        valueLabel = `${row.home_team} Value Bet`;
+        valueLabel = `${odds.home_team} Value Bet`;
       } else if (awayProb > 0.6) {
-        valueLabel = `${row.away_team} Value Bet`;
+        valueLabel = `${odds.away_team} Value Bet`;
       }
 
-      const typedRow = row as unknown as OddsRow;
-      const matchData = Array.isArray(typedRow.matches)
-        ? typedRow.matches[0]
-        : null;
-      const leagueData =
-        matchData && Array.isArray(matchData.leagues)
-          ? matchData.leagues[0]
-          : null;
-
       return {
-        matchId: typedRow.match_id,
-        homeTeam: typedRow.home_team,
-        awayTeam: typedRow.away_team,
-        homeOdds: this.toNum(typedRow.home_odds),
-        drawOdds: this.toNum(typedRow.draw_odds),
-        awayOdds: this.toNum(typedRow.away_odds),
+        matchId: odds.match_id,
+        homeTeam: odds.home_team,
+        awayTeam: odds.away_team,
+        homeOdds: this.toNum(odds.home_odds),
+        drawOdds: this.toNum(odds.draw_odds),
+        awayOdds: this.toNum(odds.away_odds),
         homeProb,
-        drawProb: this.toNum(typedRow.draw_prob),
+        drawProb: this.toNum(odds.draw_prob),
         awayProb,
-        matchDate: matchData?.match_date ?? null,
-        status: matchData?.status ?? null,
-        leagueId: matchData?.league_id ?? null,
-        leagueName: leagueData?.name ?? null,
+        matchDate: match_date ?? null,
+        status: 'scheduled',
+        leagueId: league_id ?? null,
+        leagueName,
         valueLabel,
       };
     });
   }
 
   // ─── D) Predictions ──────────────────────────────────────────────────────
+  //
+  // Stratégie :
+  //   1. Essayer d'abord l'API Python ML (http://localhost:8000/predictions)
+  //   2. Si ML indisponible (timeout, erreur réseau) → fallback Supabase
+  //
+  // Le modèle ML met à jour match_odds.home_prob/draw_prob/away_prob dans
+  // Supabase après chaque run — les deux sources convergent donc vers les
+  // mêmes données une fois le ML lancé.
+  // ─────────────────────────────────────────────────────────────────────────
 
   async getPredictions(leagueId?: string, limit = 20) {
-    let query = this.db
-      .from('match_odds')
-      .select(
-        `match_id, home_team, away_team,
-         home_odds, draw_odds, away_odds,
-         home_prob, draw_prob, away_prob,
-         matches!inner(match_date, status, league_id,
-           leagues!inner(name))`,
-      )
-      .eq('matches.status', 'scheduled')
-      .order('matches.match_date', { ascending: true })
-      .limit(limit);
-
-    if (leagueId) {
-      query = query.eq('matches.league_id', leagueId);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      throw new InternalServerErrorException(
-        `Failed to fetch predictions: ${error.message}`,
+    // ── Tentative 1 : API Python ML ────────────────────────────────────────
+    try {
+      const mlPredictions = await this.fetchFromMlApi(leagueId, limit);
+      if (mlPredictions.length > 0) {
+        this.logger.log(
+          `✅ Prédictions ML chargées depuis Python API (${mlPredictions.length} matchs)`,
+        );
+        return mlPredictions;
+      }
+    } catch (mlErr) {
+      this.logger.warn(
+        `⚠️  API ML indisponible (${this.mlApiUrl}) — fallback Supabase. Raison: ${(mlErr as Error).message}`,
       );
     }
 
-    return (data || []).map((row) => {
-      const homeProb = this.toNum(row.home_prob);
-      const drawProb = this.toNum(row.draw_prob);
-      const awayProb = this.toNum(row.away_prob);
+    // ── Tentative 2 : Fallback Supabase (cotes bookmaker) ─────────────────
+    this.logger.log(
+      '🔄 Calcul des prédictions depuis Supabase (bookmaker odds)...',
+    );
+    return this.fetchPredictionsFromSupabase(leagueId, limit);
+  }
+
+  // ─── Appel à l'API Python ML ─────────────────────────────────────────────
+
+  private async fetchFromMlApi(
+    leagueId?: string,
+    limit = 20,
+  ): Promise<object[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      upsert: 'false', // Ne pas re-upserter depuis NestJS
+    });
+    if (leagueId) params.set('league_id', leagueId);
+
+    const url = `${this.mlApiUrl}/predictions?${params.toString()}`;
+
+    // Timeout 3 secondes — si le ML est lent, on ne bloque pas l'app
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      throw new Error(`ML API répondu ${response.status}`);
+    }
+
+    const json = (await response.json()) as {
+      predictions?: object[];
+      count?: number;
+      modelAccuracy?: number;
+    };
+
+    interface MlPrediction {
+      matchId: string;
+      leagueId?: string;
+      homeTeam: string;
+      awayTeam: string;
+      matchDate: string;
+      leagueName: string;
+      predictedOutcome: string;
+      predictedLabel: string;
+      confidence: number;
+      confidenceLevel: string;
+      homeProb: number;
+      drawProb: number;
+      awayProb: number;
+      homeOdds: number;
+      drawOdds: number;
+      awayOdds: number;
+      mlHomeOdds?: number | null;
+      mlDrawOdds?: number | null;
+      mlAwayOdds?: number | null;
+    }
+
+    const predictions = (json.predictions ?? []) as MlPrediction[];
+
+    // Normaliser le format ML → format attendu par Flutter
+    return predictions.map((p) => ({
+      matchId: p.matchId,
+      leagueId: p.leagueId ?? null,
+      homeTeam: p.homeTeam,
+      awayTeam: p.awayTeam,
+      matchDate: p.matchDate,
+      leagueName: p.leagueName,
+      predictedOutcome: p.predictedOutcome, // 'home' | 'draw' | 'away'
+      predictedLabel: p.predictedLabel, // ex: "Man City Win"
+      confidence: p.confidence, // 0-100
+      confidenceLevel: p.confidenceLevel, // 'high' | 'medium' | 'low'
+      homeProb: p.homeProb,
+      drawProb: p.drawProb,
+      awayProb: p.awayProb,
+      homeOdds: p.homeOdds,
+      drawOdds: p.drawOdds,
+      awayOdds: p.awayOdds,
+      // Cotes calculées par le ML (bonus par rapport au fallback Supabase)
+      mlHomeOdds: p.mlHomeOdds ?? null,
+      mlDrawOdds: p.mlDrawOdds ?? null,
+      mlAwayOdds: p.mlAwayOdds ?? null,
+      // Indique la source pour le debugging
+      source: 'ml',
+    }));
+  }
+
+  // ─── Fallback : prédictions depuis Supabase (cotes bookmaker) ────────────
+
+  private async fetchPredictionsFromSupabase(
+    leagueId?: string,
+    limit = 20,
+  ): Promise<object[]> {
+    const scanLimit = Math.max(limit * 5, 50);
+    const matches = await this.fetchScheduledMatchesOrdered(
+      leagueId,
+      scanLimit,
+    );
+    const ids = matches.map((m) => String(m.id));
+    const oddsMap = await this.fetchMatchOddsMap(ids);
+
+    const merged: Array<{
+      odds: MatchOddsFlat;
+      match_date: unknown;
+      leagueName: string | null;
+    }> = [];
+
+    for (const m of matches) {
+      if (merged.length >= limit) break;
+      const odds = oddsMap.get(String(m.id));
+      if (!odds) continue;
+      merged.push({
+        odds,
+        match_date: m.match_date,
+        leagueName: this.leagueNameFromMatch(m.leagues),
+      });
+    }
+
+    return merged.map(({ odds, match_date, leagueName }) => {
+      const homeProb = this.toNum(odds.home_prob);
+      const drawProb = this.toNum(odds.draw_prob);
+      const awayProb = this.toNum(odds.away_prob);
 
       type Outcome = 'home' | 'draw' | 'away';
       const candidates: Array<{
@@ -450,9 +642,9 @@ export class AnalyticsService {
         prob: number;
         label: string;
       }> = [
-        { outcome: 'home', prob: homeProb, label: `${row.home_team} Win` },
+        { outcome: 'home', prob: homeProb, label: `${odds.home_team} Win` },
         { outcome: 'draw', prob: drawProb, label: 'Draw' },
-        { outcome: 'away', prob: awayProb, label: `${row.away_team} Win` },
+        { outcome: 'away', prob: awayProb, label: `${odds.away_team} Win` },
       ];
 
       const best = candidates.reduce((a, b) => (a.prob >= b.prob ? a : b));
@@ -467,31 +659,26 @@ export class AnalyticsService {
         confidenceLevel = 'low';
       }
 
-      const typedRow2 = row as unknown as OddsRow;
-      const matchData2 = Array.isArray(typedRow2.matches)
-        ? typedRow2.matches[0]
-        : null;
-      const leagueData2 =
-        matchData2 && Array.isArray(matchData2.leagues)
-          ? matchData2.leagues[0]
-          : null;
-
       return {
-        matchId: typedRow2.match_id,
-        homeTeam: typedRow2.home_team,
-        awayTeam: typedRow2.away_team,
-        matchDate: matchData2?.match_date ?? null,
-        leagueName: leagueData2?.name ?? null,
+        matchId: odds.match_id,
+        homeTeam: odds.home_team,
+        awayTeam: odds.away_team,
+        matchDate: match_date ?? null,
+        leagueName,
         predictedOutcome: best.outcome,
         predictedLabel: best.label,
         confidence,
-        homeOdds: this.toNum(typedRow2.home_odds),
-        drawOdds: this.toNum(typedRow2.draw_odds),
-        awayOdds: this.toNum(typedRow2.away_odds),
+        homeOdds: this.toNum(odds.home_odds),
+        drawOdds: this.toNum(odds.draw_odds),
+        awayOdds: this.toNum(odds.away_odds),
         homeProb,
         drawProb,
         awayProb,
         confidenceLevel,
+        mlHomeOdds: null,
+        mlDrawOdds: null,
+        mlAwayOdds: null,
+        source: 'supabase',
       };
     });
   }
