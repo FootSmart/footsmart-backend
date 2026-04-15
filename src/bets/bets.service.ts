@@ -152,16 +152,16 @@ export class BetsService {
 				throw new NotFoundException('User not found');
 			}
 
-			const balanceBefore = this.toNumber(user.balance);
-			if (balanceBefore < stake) {
+			const pointsBefore = this.toNumber(user.points);
+			if (pointsBefore < stake) {
 				throw new BadRequestException(
-					`Insufficient balance. Current balance: ${balanceBefore.toFixed(2)}, stake: ${stake.toFixed(2)}`,
+					`Insufficient points. Current points: ${pointsBefore}, stake: ${stake.toFixed(2)}`,
 				);
 			}
 
-			const balanceAfter = Number((balanceBefore - stake).toFixed(2));
+			const pointsAfter = pointsBefore - stake;
 
-			user.balance = balanceAfter;
+			user.points = pointsAfter;
 			await manager.save(User, user);
 
 			const walletTransaction = manager.create(WalletTransaction, {
@@ -189,8 +189,8 @@ export class BetsService {
 			return {
 				bet,
 				wallet: {
-					balanceBefore,
-					balanceAfter,
+					pointsBefore,
+					pointsAfter,
 					debited: stake,
 				},
 			};

@@ -33,7 +33,7 @@ export class WalletController {
   @Get('balance')
   @ApiOperation({
     summary: 'Get wallet balance',
-    description: 'Returns the current balance of the authenticated user',
+    description: 'Returns the current balance and points of the authenticated user',
   })
   @ApiResponse({
     status: 200,
@@ -41,6 +41,7 @@ export class WalletController {
     schema: {
       example: {
         balance: 1050.75,
+        points: 1050,
         currency: 'USD',
       },
     },

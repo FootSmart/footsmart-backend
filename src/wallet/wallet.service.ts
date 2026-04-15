@@ -17,12 +17,12 @@ export class WalletService {
   ) {}
 
   /**
-   * Get user's current balance
+   * Get user's current balance and points
    */
   async getBalance(userId: string) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: ['id', 'balance'],
+      select: ['id', 'balance', 'points'],
     });
 
     if (!user) {
@@ -31,6 +31,7 @@ export class WalletService {
 
     return {
       balance: Number(user.balance ?? 0),
+      points: Number(user.points ?? 0),
       currency: 'USD',
     };
   }
@@ -183,7 +184,7 @@ export class WalletService {
   }
 
   /**
-   * Place a bet (internal use)
+   * Place a bet using points (internal use)
    */
   async placeBet(userId: string, amount: number) {
     if (amount <= 0) {
@@ -201,16 +202,16 @@ export class WalletService {
         throw new NotFoundException('User not found');
       }
 
-      const balance = user.balance || 0;
+      const points = user.points || 0;
 
-      if (Number(balance) < Number(amount)) {
-        throw new BadRequestException('Insufficient balance for bet');
+      if (Number(points) < Number(amount)) {
+        throw new BadRequestException('Insufficient points for bet');
       }
 
-      const balanceBefore = balance;
-      const balanceAfter = Number((Number(balanceBefore) - Number(amount)).toFixed(2));
+      const pointsBefore = points;
+      const pointsAfter = Number(pointsBefore) - Number(amount);
 
-      user.balance = balanceAfter;
+      user.points = pointsAfter;
       await manager.save(User, user);
 
       const transaction = manager.create(WalletTransaction, {
@@ -226,7 +227,7 @@ export class WalletService {
   }
 
   /**
-   * Add winnings (internal use)
+   * Add winnings in points (internal use)
    */
   async addWinnings(userId: string, amount: number) {
     if (amount <= 0) {
@@ -244,10 +245,10 @@ export class WalletService {
         throw new NotFoundException('User not found');
       }
 
-      const balanceBefore = user.balance || 0;
-      const balanceAfter = Number((Number(balanceBefore) + Number(amount)).toFixed(2));
+      const pointsBefore = user.points || 0;
+      const pointsAfter = Number(pointsBefore) + Number(amount);
 
-      user.balance = balanceAfter;
+      user.points = pointsAfter;
       await manager.save(User, user);
 
       const transaction = manager.create(WalletTransaction, {
@@ -264,6 +265,7 @@ export class WalletService {
 
   /**
    * Crédite le portefeuille après un paiement Stripe (webhook idempotent).
+   * Ajoute également des points (1$ = 1 point).
    */
   async depositFromStripe(
     userId: string,
@@ -273,6 +275,8 @@ export class WalletService {
     if (amount <= 0) {
       throw new BadRequestException('Amount must be positive');
     }
+
+    const pointsToAdd = Math.floor(amount);
 
     return this.dataSource.transaction(async (manager) => {
       const existing = await manager.findOne(WalletTransaction, {
@@ -301,7 +305,11 @@ export class WalletService {
         (Number(balanceBefore) + Number(amount)).toFixed(2),
       );
 
+      const pointsBefore = user.points || 0;
+      const pointsAfter = Number(pointsBefore) + pointsToAdd;
+
       user.balance = balanceAfter;
+      user.points = pointsAfter;
       await manager.save(User, user);
 
       const transaction = manager.create(WalletTransaction, {
@@ -321,8 +329,66 @@ export class WalletService {
           type: transaction.type,
           amount: transaction.amount,
           newBalance: balanceAfter,
+          newPoints: pointsAfter,
           createdAt: transaction.createdAt,
         },
+      };
+    });
+  }
+
+  /**
+   * Ajoute des points après achat d'un pack (via Stripe).
+   */
+  async addPointsFromPurchase(
+    userId: string,
+    totalPoints: number,
+    stripePaymentIntentId: string,
+  ) {
+    if (totalPoints <= 0) {
+      throw new BadRequestException('Points must be positive');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const existing = await manager.findOne(WalletTransaction, {
+        where: { stripePaymentIntentId },
+      });
+      if (existing) {
+        return {
+          success: true,
+          duplicate: true,
+          newPoints: null,
+        };
+      }
+
+      const user = await manager
+        .createQueryBuilder(User, 'user')
+        .where('user.id = :userId', { userId })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const pointsBefore = user.points || 0;
+      const pointsAfter = Number(pointsBefore) + totalPoints;
+
+      user.points = pointsAfter;
+      await manager.save(User, user);
+
+      const transaction = manager.create(WalletTransaction, {
+        userId,
+        type: TransactionType.DEPOSIT,
+        amount: totalPoints,
+        stripePaymentIntentId,
+      });
+
+      await manager.save(WalletTransaction, transaction);
+
+      return {
+        success: true,
+        duplicate: false,
+        newPoints: pointsAfter,
       };
     });
   }

@@ -36,6 +36,9 @@ export class User {
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
   balance: number;
 
+  @Column({ type: 'numeric', precision: 12, scale: 0, default: 0 })
+  points: number;
+
   @Column({ default: 'player' })
   role: string;
 

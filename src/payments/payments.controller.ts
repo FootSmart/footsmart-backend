@@ -40,6 +40,122 @@ export class PaymentsController {
     ).replace(/\/$/, '');
   }
 
+  private static readonly POINTS_PACKS = [
+    { id: 'pack_100', price: 4.99, points: 500, bonus: 0, label: '500 Points' },
+    { id: 'pack_250', price: 9.99, points: 250, bonus: 0, label: '250 Points' },
+    { id: 'pack_500', price: 19.99, points: 500, bonus: 50, label: '500 + 50 Bonus' },
+    { id: 'pack_1000', price: 39.99, points: 1000, bonus: 150, label: '1000 + 150 Bonus' },
+    { id: 'pack_2500', price: 99.99, points: 2500, bonus: 500, label: '2500 + 500 Bonus' },
+  ];
+
+  /**
+   * Liste des packs de points disponibles à l'achat.
+   */
+  @Get('points-packs')
+  @ApiOperation({
+    summary: 'Liste des packs de points',
+    description: 'Retourne les packs de points avec prix et bonus',
+  })
+  getPointsPacks() {
+    return PaymentsController.POINTS_PACKS.map((pack) => ({
+      id: pack.id,
+      price: pack.price,
+      points: pack.points,
+      bonus: pack.bonus,
+      totalPoints: pack.points + pack.bonus,
+      label: pack.label,
+    }));
+  }
+
+  /**
+   * Achat d'un pack de points via Stripe Checkout.
+   */
+  @Post('stripe/buy-points-pack')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Acheter un pack de points',
+    description: 'Crée une session Stripe Checkout pour acheter un pack de points',
+  })
+  async buyPointsPack(
+    @Req() req: any,
+    @Body() body: { packId: string; currency?: string },
+  ) {
+    try {
+      const stripe = this.stripeService.getStripe();
+      const userId = req.user.id as string;
+      const packId = body.packId;
+      const currency = (body.currency ?? 'usd').toLowerCase();
+
+      const pack = PaymentsController.POINTS_PACKS.find((p) => p.id === packId);
+      if (!pack) {
+        throw new BadRequestException('Pack de points invalide');
+      }
+
+      let user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) throw new BadRequestException('User not found');
+
+      user = await this.ensureStripeCustomer(user, userId);
+      this.stripeService.assertPublishableKey();
+
+      const priceInMinor = Math.round(pack.price * 100);
+      const totalPoints = pack.points + pack.bonus;
+
+      const base = this.appBaseUrl();
+      const successUrl = `${base}/api/payments/stripe/hosted-deposit-return?session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl = `${base}/api/payments/stripe/hosted-deposit-return?canceled=1`;
+
+      const session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        customer: user.stripeCustomerId!,
+        currency,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency,
+              unit_amount: priceInMinor,
+              product_data: {
+                name: `Pack ${pack.label} - FootSmart`,
+                description: `${totalPoints} points (${pack.points} + ${pack.bonus} bonus)`,
+              },
+            },
+          },
+        ],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata: {
+          userId,
+          kind: 'points_pack_purchase',
+          packId,
+          points: pack.points.toString(),
+          bonus: pack.bonus.toString(),
+          totalPoints: totalPoints.toString(),
+        },
+        payment_intent_data: {
+          metadata: {
+            userId,
+            kind: 'points_pack_purchase',
+            packId,
+            points: pack.points.toString(),
+            bonus: pack.bonus.toString(),
+          },
+        },
+      });
+
+      if (!session.url) {
+        throw new BadRequestException('Stripe Checkout URL indisponible');
+      }
+
+      return {
+        url: session.url,
+        publishableKey: this.stripeService.getPublishableKey(),
+      };
+    } catch (err) {
+      rethrowStripeError(err);
+    }
+  }
+
   /**
    * Garantit un Customer Stripe valide pour les clés API actuelles.
    * Si l’ID en base vient d’un ancien compte / clés rotées → « No such customer » → on recrée.
@@ -459,11 +575,77 @@ export class PaymentsController {
     }
   }
 
+  /**
+   * Finalise l'achat d'un pack de points après retour Stripe.
+   */
+  @Post('stripe/complete-points-pack')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Finaliser achat pack de points',
+    description: 'Appelé après redirection Stripe pour créditer les points',
+  })
+  async completePointsPackPurchase(
+    @Req() req: any,
+    @Body() body: { sessionId: string },
+  ) {
+    try {
+      const stripe = this.stripeService.getStripe();
+      const userId = req.user.id as string;
+      const sessionId = (body.sessionId ?? '').trim();
+      if (!sessionId) {
+        throw new BadRequestException('sessionId is required');
+      }
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ['payment_intent'],
+      });
+
+      const md = session.metadata || {};
+      if (md.kind !== 'points_pack_purchase' || !md.userId) {
+        throw new BadRequestException('Invalid checkout session');
+      }
+      if (md.userId !== userId) {
+        throw new ForbiddenException('Session does not belong to this user');
+      }
+
+      if (session.payment_status !== 'paid') {
+        throw new BadRequestException('Payment not completed');
+      }
+
+      const piRaw = session.payment_intent;
+      const paymentIntentId =
+        typeof piRaw === 'string' ? piRaw : (piRaw as { id?: string })?.id;
+      const points = Number(md.points || 0);
+      const bonus = Number(md.bonus || 0);
+      const totalPoints = points + bonus;
+
+      if (!paymentIntentId || totalPoints <= 0) {
+        throw new BadRequestException('Invalid payment session');
+      }
+
+      const result = await this.walletService.addPointsFromPurchase(
+        userId,
+        totalPoints,
+        paymentIntentId,
+      );
+
+      return {
+        success: true,
+        duplicate: result.duplicate,
+        newPoints: result.newPoints,
+      };
+    } catch (err) {
+      rethrowStripeError(err);
+    }
+  }
+
   @Get('stripe/hosted-deposit-return')
-  @ApiOperation({ summary: 'Retour HTTP après Checkout (dépôt wallet)' })
-  hostedDepositReturn(
+  @ApiOperation({ summary: 'Retour HTTP après Checkout (dépôt wallet ou points pack)' })
+  async hostedDepositReturn(
+    @Req() req: any,
     @Query('canceled') canceled: string | undefined,
-    @Query('session_id') _sessionId: string | undefined,
+    @Query('session_id') sessionId: string | undefined,
     @Res() res: Response,
   ) {
     if (canceled === '1') {
@@ -475,12 +657,88 @@ export class PaymentsController {
         );
       return;
     }
-    res
-      .status(200)
-      .type('html')
-      .send(
-        '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2>Paiement réussi</h2><p>Retournez à l’application pour voir votre solde.</p></body></html>',
-      );
+
+    if (!sessionId) {
+      res
+        .status(400)
+        .type('html')
+        .send(
+          '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2>Erreur</h2><p>Session ID manquant.</p></body></html>',
+        );
+      return;
+    }
+
+    try {
+      const stripe = this.stripeService.getStripe();
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ['payment_intent'],
+      });
+
+      const md = session.metadata || {};
+      const kind = md.kind;
+
+      if (kind === 'points_pack_purchase' && md.userId) {
+        const userId = md.userId as string;
+        const points = Number(md.points || 0);
+        const bonus = Number(md.bonus || 0);
+        const totalPoints = points + bonus;
+
+        const piRaw = session.payment_intent;
+        const paymentIntentId =
+          typeof piRaw === 'string' ? piRaw : (piRaw as { id?: string })?.id;
+
+        if (paymentIntentId && totalPoints > 0) {
+          await this.walletService.addPointsFromPurchase(
+            userId,
+            totalPoints,
+            paymentIntentId,
+          );
+        }
+
+        res
+          .status(200)
+          .type('html')
+          .send(
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2> Paiement réussi !</h2><p>Vos points ont été ajoutés.</p><script>setTimeout(() => window.close(), 2000)</script></body></html>',
+          );
+        return;
+      }
+
+      if (kind === 'wallet_deposit_checkout' && md.userId) {
+        const userId = md.userId as string;
+        const amount = Number(md.amount || 0);
+
+        const piRaw = session.payment_intent;
+        const paymentIntentId =
+          typeof piRaw === 'string' ? piRaw : (piRaw as { id?: string })?.id;
+
+        if (paymentIntentId && amount > 0) {
+          await this.walletService.depositFromStripe(userId, amount, paymentIntentId);
+        }
+
+        res
+          .status(200)
+          .type('html')
+          .send(
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2>Paiement réussi</h2><p>Retournez à l\'application pour voir votre solde.</p></body></html>',
+          );
+        return;
+      }
+
+      res
+        .status(200)
+        .type('html')
+        .send(
+          '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2>Paiement réussi</h2><p>Vous pouvez fermer cette page.</p></body></html>',
+        );
+    } catch (err) {
+      res
+        .status(500)
+        .type('html')
+        .send(
+          '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head><body style="font-family:system-ui;padding:2rem;text-align:center"><h2>Erreur</h2><p>Le paiement a réussi mais le crédit a échoué. Contactez le support.</p></body></html>',
+        );
+    }
   }
 
   /** Page de retour après Checkout (ouverte par Stripe en redirection). */
@@ -591,7 +849,24 @@ export class PaymentsController {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as any;
       const md = session.metadata || {};
-      if (md.kind === 'wallet_deposit_checkout' && md.userId) {
+      
+      if (md.kind === 'points_pack_purchase' && md.userId) {
+        const piRaw = session.payment_intent;
+        const paymentIntentId =
+          typeof piRaw === 'string' ? piRaw : (piRaw?.id as string | undefined);
+        const points = Number(md.points || 0);
+        const bonus = Number(md.bonus || 0);
+        const totalPoints = points + bonus;
+        const userId = md.userId as string;
+        
+        if (paymentIntentId && totalPoints > 0 && userId) {
+          await this.walletService.addPointsFromPurchase(
+            userId,
+            totalPoints,
+            paymentIntentId,
+          );
+        }
+      } else if (md.kind === 'wallet_deposit_checkout' && md.userId) {
         const piRaw = session.payment_intent;
         const paymentIntentId =
           typeof piRaw === 'string' ? piRaw : (piRaw?.id as string | undefined);
