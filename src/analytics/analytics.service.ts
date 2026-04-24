@@ -682,4 +682,138 @@ export class AnalyticsService {
       };
     });
   }
+
+  // ─── E) Admin Dashboard ─────────────────────────────────────────────────
+
+  async getAdminDashboardStats() {
+    const [
+      totalBettors,
+      activeBettors,
+      totalBets,
+      wonBets,
+      lostBets,
+      rawWallet,
+    ] = await Promise.all([
+      this.userRepository.count({ where: { role: 'player' } }),
+      this.userRepository.count({
+        where: { role: 'player', accountStatus: 'active' },
+      }),
+      this.betRepository.count(),
+      this.betRepository.count({ where: { status: BetStatus.WON } }),
+      this.betRepository.count({ where: { status: BetStatus.LOST } }),
+      this.userRepository
+        .createQueryBuilder('u')
+        .select('COALESCE(SUM(u.balance), 0)', 'sum')
+        .where('u.role = :role', { role: 'player' })
+        .getRawOne<{ sum: string | number | null }>(),
+    ]);
+
+    const resolved = wonBets + lostBets;
+    const averageWinRate = resolved > 0 ? this.round1((wonBets / resolved) * 100) : 0;
+    const totalBalance = this.round2(this.toNum(rawWallet?.sum ?? 0));
+
+    return {
+      totalBettors,
+      activeBettors,
+      totalBets,
+      wonBets,
+      lostBets,
+      averageWinRate,
+      totalBalance,
+    };
+  }
+
+  async getAdminBettors(opts: { limit?: number; offset?: number; search?: string }) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const search = opts.search?.trim();
+
+    const usersQb = this.userRepository
+      .createQueryBuilder('u')
+      .where('u.role = :role', { role: 'player' });
+
+    if (search) {
+      usersQb.andWhere(
+        '(LOWER(u.displayName) LIKE LOWER(:q) OR LOWER(u.email) LIKE LOWER(:q))',
+        { q: `%${search}%` },
+      );
+    }
+
+    const total = await usersQb.getCount();
+
+    const users = await usersQb
+      .orderBy('u.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset)
+      .getMany();
+
+    const userIds = users.map((u) => u.id);
+    const statsMap = new Map<
+      string,
+      {
+        totalBets: number;
+        wonBets: number;
+        lostBets: number;
+      }
+    >();
+
+    if (userIds.length > 0) {
+      const rawStats = await this.betRepository
+        .createQueryBuilder('b')
+        .select('b.userId', 'userId')
+        .addSelect('COUNT(*)', 'totalBets')
+        .addSelect(
+          `SUM(CASE WHEN b.status = :wonStatus THEN 1 ELSE 0 END)`,
+          'wonBets',
+        )
+        .addSelect(
+          `SUM(CASE WHEN b.status = :lostStatus THEN 1 ELSE 0 END)`,
+          'lostBets',
+        )
+        .where('b.userId IN (:...userIds)', { userIds })
+        .setParameters({
+          wonStatus: BetStatus.WON,
+          lostStatus: BetStatus.LOST,
+        })
+        .groupBy('b.userId')
+        .getRawMany<{
+          userId: string;
+          totalBets: string;
+          wonBets: string;
+          lostBets: string;
+        }>();
+
+      for (const row of rawStats) {
+        statsMap.set(row.userId, {
+          totalBets: Number(row.totalBets ?? 0),
+          wonBets: Number(row.wonBets ?? 0),
+          lostBets: Number(row.lostBets ?? 0),
+        });
+      }
+    }
+
+    const items = users.map((u) => {
+      const s = statsMap.get(u.id) ?? { totalBets: 0, wonBets: 0, lostBets: 0 };
+      const resolved = s.wonBets + s.lostBets;
+      const winRate = resolved > 0 ? this.round1((s.wonBets / resolved) * 100) : 0;
+
+      return {
+        id: u.id,
+        displayName: u.displayName,
+        email: u.email,
+        role: u.role,
+        accountStatus: u.accountStatus,
+        balance: this.toNum(u.balance),
+        totalBets: s.totalBets,
+        winRate,
+      };
+    });
+
+    return {
+      items,
+      total,
+      limit,
+      offset,
+    };
+  }
 }

@@ -22,7 +22,7 @@ export class RegisterDto {
   })
   @IsEmail({}, { message: 'Invalid email format' })
   @IsNotEmpty({ message: 'Email is required' })
-  email: string;
+  email!: string;
 
   @ApiProperty({
     example: 'SecurePass123',
@@ -33,7 +33,7 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'Password is required' })
   @MinLength(8, { message: 'Password must be at least 8 characters' })
   @MaxLength(50, { message: 'Password must not exceed 50 characters' })
-  password: string;
+  password!: string;
 
   @ApiProperty({
     example: 'John Doe',
@@ -43,7 +43,7 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'Display name is required' })
   @MinLength(2, { message: 'Display name must be at least 2 characters' })
   @MaxLength(50, { message: 'Display name must not exceed 50 characters' })
-  displayName: string;
+  displayName!: string;
 
   @ApiProperty({
     example: '1990-01-15',
@@ -51,7 +51,7 @@ export class RegisterDto {
   })
   @IsDateString({}, { message: 'Invalid date format. Use ISO 8601 (YYYY-MM-DD)' })
   @IsNotEmpty({ message: 'Date of birth is required' })
-  dateOfBirth: string;
+  dateOfBirth!: string;
 
   @ApiProperty({
     example: 'player',
@@ -62,7 +62,7 @@ export class RegisterDto {
     message: 'Role must be either player or coach',
   })
   @IsNotEmpty({ message: 'Role is required' })
-  role: PublicRole;
+  role!: PublicRole;
 
   @ApiProperty({
     example: 'Nigeria',

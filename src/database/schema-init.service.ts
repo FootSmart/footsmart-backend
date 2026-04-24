@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class SchemaInitService implements OnModuleInit {
@@ -14,6 +15,7 @@ export class SchemaInitService implements OnModuleInit {
   async onModuleInit() {
     // Toujours : colonne users.balance (sinon GET /wallet/* → 500 si la table users existe sans cette colonne)
     await this.ensureUsersBalanceColumn();
+    await this.ensureDefaultAdminAccount();
 
     const enabledRaw = this.configService.get<string>('AUTO_CREATE_SCHEMA');
     const enabled = enabledRaw === 'true' || enabledRaw === '1';
@@ -92,6 +94,115 @@ CREATE INDEX IF NOT EXISTS "IDX_wallet_transactions_user_id_created_at"
       `);
 
       this.logger.log('wallet_transactions: créée');
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /** Crée (ou promeut) un compte admin par défaut de manière idempotente. */
+  private async ensureDefaultAdminAccount() {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+
+    const adminEmail =
+      this.configService.get<string>('DEFAULT_ADMIN_EMAIL')?.trim() ||
+      'admin@gmail.com';
+    const adminPassword =
+      this.configService.get<string>('DEFAULT_ADMIN_PASSWORD') || 'admin123';
+    const adminDisplayName =
+      this.configService.get<string>('DEFAULT_ADMIN_DISPLAY_NAME') ||
+      'FootSmart Admin';
+
+    try {
+      const existing = await runner.query(
+        `
+        SELECT "id", "role"
+        FROM "users"
+        WHERE lower("email") = lower($1)
+        LIMIT 1
+        `,
+        [adminEmail],
+      );
+
+      if (Array.isArray(existing) && existing.length > 0) {
+        const current = existing[0] as { id: string; role: string };
+        const passwordHash = await bcrypt.hash(adminPassword, 10);
+        if (current.role !== 'admin') {
+          await runner.query(
+            `
+            UPDATE "users"
+            SET "role" = 'admin',
+                "password_hash" = $2,
+                "display_name" = COALESCE(NULLIF("display_name", ''), $3),
+                "account_status" = 'active',
+                "updated_at" = now()
+            WHERE "id" = $1
+            `,
+            [current.id, passwordHash, adminDisplayName],
+          );
+          this.logger.warn(
+            `Compte ${adminEmail} promu en admin automatiquement.`,
+          );
+        } else {
+          await runner.query(
+            `
+            UPDATE "users"
+            SET "password_hash" = $2,
+                "display_name" = COALESCE(NULLIF("display_name", ''), $3),
+                "account_status" = 'active',
+                "updated_at" = now()
+            WHERE "id" = $1
+            `,
+            [current.id, passwordHash, adminDisplayName],
+          );
+          this.logger.log(
+            'Compte admin par defaut: deja present (mot de passe reinitialise).',
+          );
+        }
+        return;
+      }
+
+      const passwordHash = await bcrypt.hash(adminPassword, 10);
+
+      await runner.query(
+        `
+        INSERT INTO "users" (
+          "email",
+          "password_hash",
+          "display_name",
+          "is_18_plus",
+          "balance",
+          "points",
+          "role",
+          "kyc_status",
+          "account_status",
+          "created_at",
+          "updated_at"
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          true,
+          0,
+          0,
+          'admin',
+          'not_started',
+          'active',
+          now(),
+          now()
+        )
+        `,
+        [adminEmail, passwordHash, adminDisplayName],
+      );
+
+      this.logger.warn(
+        `Compte admin par defaut cree: ${adminEmail} (change DEFAULT_ADMIN_PASSWORD en production).`,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `Compte admin par defaut: impossible de verifier/creer (${(e as Error).message}).`,
+      );
     } finally {
       await runner.release();
     }
