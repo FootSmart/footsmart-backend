@@ -1,6 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
-
+import {
+  IsBoolean,
+  IsDateString,
+  IsEmail,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 export class UpdateProfileDto {
   @ApiPropertyOptional({ example: 'John Doe' })
   @IsString()
@@ -40,4 +46,20 @@ export class UpdateProfileDto {
   @MaxLength(100)
   @IsOptional()
   club?: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  subscriptionActive?: boolean;
+
+  @ApiPropertyOptional({ example: 'pro_monthly' })
+  @IsString()
+  @MaxLength(100)
+  @IsOptional()
+  subscriptionPlan?: string;
+
+  @ApiPropertyOptional({ example: '2026-01-10T12:00:00Z' })
+  @IsDateString()
+  @IsOptional()
+  subscriptionEndsAt?: string;
 }

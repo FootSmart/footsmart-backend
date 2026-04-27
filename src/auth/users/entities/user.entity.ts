@@ -55,6 +55,15 @@ export class User {
   @Column({ name: 'stripe_customer_id', nullable: true })
   stripeCustomerId?: string;
 
+  @Column({ name: 'subscriptionActive', default: false })
+  subscriptionActive: boolean;
+
+  @Column({ name: 'subscriptionPlan', type: 'text', nullable: true })
+  subscriptionPlan?: string | null;
+
+  @Column({ name: 'subscriptionEndsAt', type: 'timestamptz', nullable: true })
+  subscriptionEndsAt?: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

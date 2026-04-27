@@ -83,6 +83,15 @@ async function bootstrap() {
       },
       'JWT-auth',
     )
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'RevenueCat webhook secret',
+        description: 'Enter only the secret value, without Bearer',
+      },
+      'revenuecat-webhook',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
