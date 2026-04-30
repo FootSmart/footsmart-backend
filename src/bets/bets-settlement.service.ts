@@ -1,7 +1,13 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Inject,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Bet, BetSelection, BetStatus } from './entities/bet.entity';
 import { User } from '../auth/users/entities/user.entity';
@@ -20,10 +26,21 @@ import {
  */
 interface MatchResult {
   id: string;
-  status: string; // 'finished' | 'live' | 'scheduled' | ...
-  result: string | null; // 'home' | 'draw' | 'away' | null
-  home_goals: number;
-  away_goals: number;
+  status: string;
+  result: string | null;
+  home_goals: number | null;
+  away_goals: number | null;
+}
+
+interface SettlementCounts {
+  settled: number;
+  won: number;
+  lost: number;
+}
+
+interface MatchSettlementCounts extends SettlementCounts {
+  totalPaidOut: number;
+  userBalances: Record<string, number>;
 }
 
 @Injectable()
@@ -37,244 +54,318 @@ export class BetsSettlementService {
     @InjectRepository(Bet)
     private readonly betRepository: Repository<Bet>,
 
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
-
     private readonly dataSource: DataSource,
   ) {}
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CRON : tourne toutes les 5 minutes automatiquement
-  // ─────────────────────────────────────────────────────────────────────────
-
   @Cron('0 */5 * * * *') // toutes les 5 minutes
   async runSettlementCron(): Promise<void> {
-    this.logger.log('⚙️  Settlement cron démarré...');
+    this.logger.log('Settlement cron started');
     try {
-      const settled = await this.settleAllPendingBets();
+      const settled = await this.settleAllPendingBets('system-cron');
       if (settled > 0) {
-        this.logger.log(`✅ ${settled} pari(s) réglé(s) avec succès.`);
-      } else {
-        this.logger.debug('Aucun pari à régler pour le moment.');
+        this.logger.log(`Settled ${settled} bet(s) from cron`);
       }
     } catch (err) {
-      this.logger.error(
-        `❌ Erreur durant le settlement cron : ${err.message}`,
-        err.stack,
+      const e = err as Error;
+      this.logger.error(`Settlement cron failed: ${e.message}`, e.stack);
+    }
+  }
+
+  async settleAllPendingBets(settledBy = 'manual-api'): Promise<number> {
+    const stats = await this.settleAllPendingBetsDetailed(settledBy);
+    return stats.settled;
+  }
+
+  async settleAllPendingBetsDetailed(
+    settledBy = 'manual-api',
+  ): Promise<SettlementCounts> {
+    const { data: bets, error } = await this.db
+      .from('bets')
+      .select('*, matches(*)')
+      .eq('status', BetStatus.PENDING);
+
+    if (error) {
+      throw new Error(`Failed to fetch pending bets: ${error.message}`);
+    }
+
+    const rows = (bets ?? []) as Array<Record<string, any>>;
+    this.logger.log(`Settlement fetch: total pending bets=${rows.length}`);
+
+    for (const row of rows) {
+      const match = row.matches;
+      this.logger.debug(
+        `Settlement candidate bet=${row.id} match=${match?.id ?? 'n/a'} status=${match?.status ?? 'n/a'}`,
       );
     }
-  }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // MÉTHODE PRINCIPALE : règle tous les paris PENDING dont le match est fini
-  // ─────────────────────────────────────────────────────────────────────────
+    const eligibleRows = rows.filter(
+      (bet) =>
+        bet.matches &&
+        String(bet.matches.status).toLowerCase() === 'finished' &&
+        (bet.payout_credited === false || bet.payout_credited == null),
+    );
 
-  async settleAllPendingBets(): Promise<number> {
-    // 1. Récupérer tous les paris encore en attente
-    const pendingBets = await this.betRepository.find({
-      where: { status: BetStatus.PENDING },
-    });
+    this.logger.log(`Settlement eligible bets=${eligibleRows.length}`);
 
-    if (pendingBets.length === 0) return 0;
+    if (eligibleRows.length === 0) return { settled: 0, won: 0, lost: 0 };
 
-    // 2. Collecter les matchId uniques de ces paris
-    const uniqueMatchIds = [...new Set(pendingBets.map((b) => b.matchId))];
-
-    // 3. Interroger Supabase pour avoir les résultats de ces matchs
-    const matchResults = await this.fetchMatchResults(uniqueMatchIds);
-
-    // 4. Régler chaque pari dont le match est terminé
     let settledCount = 0;
+    let wonCount = 0;
+    let lostCount = 0;
 
-    for (const bet of pendingBets) {
-      const matchResult = matchResults.get(bet.matchId);
+    for (const row of eligibleRows) {
+      const matchResult = this.mapSupabaseMatch(row.matches);
+      const betId = String(row.id);
 
-      if (!matchResult) {
-        // Match introuvable dans Supabase — on ignore
+      const outcome = this.resolveMatchOutcome(matchResult);
+      if (!outcome) {
+        this.logger.warn(`Unable to resolve result for match ${matchResult.id}`);
         continue;
       }
 
-      if (matchResult.status !== 'finished') {
-        // Match pas encore terminé — on attend
-        continue;
+      const settled = await this.settleSingleBet(betId, outcome, settledBy);
+      if (settled) {
+        settledCount++;
+        if (String(row.selection) === outcome) wonCount++;
+        else lostCount++;
       }
-
-      if (!matchResult.result) {
-        // Match terminé mais résultat absent — cas rare, on ignore
-        this.logger.warn(`Match ${bet.matchId} terminé mais sans résultat.`);
-        continue;
-      }
-
-      // 5. Comparer la sélection du pari avec le résultat du match
-      const betWon = this.didBetWin(bet.selection, matchResult.result);
-
-      // 6. Mettre à jour le pari en DB (dans une transaction atomique)
-      await this.settleSingleBet(bet, betWon);
-      settledCount++;
     }
 
-    return settledCount;
+    return { settled: settledCount, won: wonCount, lost: lostCount };
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // SETTLEMENT D'UN SEUL MATCH (utile pour déclencher manuellement)
-  // ─────────────────────────────────────────────────────────────────────────
 
   async settleMatchBets(
     matchId: string,
-  ): Promise<{ settled: number; matchResult: string | null }> {
-    // 1. Récupérer le résultat du match depuis Supabase
-    const results = await this.fetchMatchResults([matchId]);
-    const matchResult = results.get(matchId);
+    settledBy = 'admin-match-finish',
+  ): Promise<MatchSettlementCounts> {
+    const { data: match, error: matchError } = await this.db
+      .from('matches')
+      .select('id, status, result, home_goals, away_goals')
+      .eq('id', matchId)
+      .single();
 
-    if (!matchResult) {
-      throw new Error(`Match ${matchId} introuvable dans Supabase`);
+    if (matchError || !match) {
+      throw new NotFoundException(matchError?.message ?? 'Match not found');
     }
 
-    if (matchResult.status !== 'finished') {
-      throw new Error(
-        `Match ${matchId} n'est pas encore terminé (status: ${matchResult.status})`,
+    const normalizedStatus = String(match.status ?? '').toLowerCase();
+    if (normalizedStatus !== 'finished') {
+      throw new BadRequestException('Match must be finished before settlement');
+    }
+
+    if (match.home_goals == null || match.away_goals == null) {
+      throw new BadRequestException(
+        'Finished match must include home_goals and away_goals',
       );
     }
 
-    if (!matchResult.result) {
-      throw new Error(`Match ${matchId} terminé mais sans résultat disponible`);
+    const outcome = this.resolveMatchOutcome(this.mapSupabaseMatch(match));
+    if (!outcome) {
+      throw new BadRequestException('Unable to resolve match outcome');
     }
 
-    // 2. Récupérer tous les paris PENDING pour ce match
-    const pendingBets = await this.betRepository.find({
-      where: { matchId, status: BetStatus.PENDING },
-    });
-
-    if (pendingBets.length === 0) {
-      return { settled: 0, matchResult: matchResult.result };
-    }
-
-    // 3. Régler chaque pari
-    let settledCount = 0;
-    for (const bet of pendingBets) {
-      const betWon = this.didBetWin(bet.selection, matchResult.result);
-      await this.settleSingleBet(bet, betWon);
-      settledCount++;
-    }
+    const pendingBets = await this.betRepository
+      .createQueryBuilder('b')
+      .where('b.matchId = :matchId', { matchId })
+      .andWhere('b.status = :status', { status: BetStatus.PENDING })
+      .andWhere('(b.payoutCredited = :credited OR b.payoutCredited IS NULL)', {
+        credited: false,
+      })
+      .getMany();
 
     this.logger.log(
-      `Match ${matchId} réglé : résultat="${matchResult.result}", ` +
-        `score=${matchResult.home_goals}-${matchResult.away_goals}, ` +
-        `${settledCount} pari(s) réglé(s).`,
+      `Settle match ${matchId}: total pending bets fetched=${pendingBets.length}`,
+    );
+    this.logger.debug(
+      `Settle match ${matchId}: match_status=${match.status}, home_goals=${match.home_goals}, away_goals=${match.away_goals}`,
     );
 
-    return { settled: settledCount, matchResult: matchResult.result };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // LOGIQUE PRINCIPALE : est-ce que le pari est gagné ?
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Compare la sélection du joueur avec le résultat réel du match.
-   *
-   * matchOutcome : 'home' | 'draw' | 'away'  (vient de Supabase)
-   * selection    : BetSelection.HOME | DRAW | AWAY  (vient de la DB)
-   *
-   * Exemples :
-   *   - Le joueur a parié HOME, le match se termine HOME → WON ✅
-   *   - Le joueur a parié HOME, le match se termine DRAW → LOST ❌
-   *   - Le joueur a parié DRAW, le match se termine DRAW → WON ✅
-   */
-  private didBetWin(selection: BetSelection, matchOutcome: string): boolean {
-    /**
-     * Le scraper stocke dans Supabase :
-     *   'H' → Home win   (équipe domicile gagne)
-     *   'D' → Draw       (match nul)
-     *   'A' → Away win   (équipe extérieure gagne)
-     *
-     * On accepte aussi les variantes longues ('home','draw','away')
-     * au cas où le scraper évolue.
-     */
-    const outcomeMap: Record<string, BetSelection> = {
-      // Format court (scraper actuel)
-      H: BetSelection.HOME,
-      D: BetSelection.DRAW,
-      A: BetSelection.AWAY,
-      // Format long (fallback)
-      home: BetSelection.HOME,
-      draw: BetSelection.DRAW,
-      away: BetSelection.AWAY,
-    };
-
-    // On normalise : on essaie d'abord le format exact, puis en majuscule
-    const expectedSelection =
-      outcomeMap[matchOutcome] ?? outcomeMap[matchOutcome.toUpperCase()];
-
-    if (!expectedSelection) {
-      this.logger.warn(
-        `Résultat inconnu du match : "${matchOutcome}" — pari non réglé.`,
-      );
-      return false;
+    if (pendingBets.length === 0) {
+      return {
+        settled: 0,
+        won: 0,
+        lost: 0,
+        totalPaidOut: 0,
+        userBalances: {},
+      };
     }
 
-    return selection === expectedSelection;
+    let settled = 0;
+    let won = 0;
+    let lost = 0;
+    let totalPaidOut = 0;
+    const userBalances: Record<string, number> = {};
+
+    for (const bet of pendingBets) {
+      const settleResult = await this.settleSingleBetWithDetails(
+        bet.id,
+        outcome,
+        settledBy,
+      );
+
+      if (!settleResult.settled) {
+        continue;
+      }
+
+      settled += 1;
+      if (settleResult.won) {
+        won += 1;
+      } else {
+        lost += 1;
+      }
+
+      if (settleResult.payout > 0) {
+        totalPaidOut = Number((totalPaidOut + settleResult.payout).toFixed(2));
+      }
+
+      if (settleResult.userId && settleResult.balanceAfter != null) {
+        userBalances[settleResult.userId] = settleResult.balanceAfter;
+      }
+    }
+
+    return {
+      settled,
+      won,
+      lost,
+      totalPaidOut,
+      userBalances,
+    };
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // MISE À JOUR DB : pari + wallet (transaction atomique)
-  // ─────────────────────────────────────────────────────────────────────────
+  private isFinishedMatch(match: MatchResult): boolean {
+    return String(match.status).toLowerCase() === 'finished';
+  }
 
-  private async settleSingleBet(bet: Bet, won: boolean): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
+  private resolveMatchOutcome(match: MatchResult): BetSelection | null {
+    const hg = match.home_goals;
+    const ag = match.away_goals;
+
+    if (typeof hg === 'number' && typeof ag === 'number') {
+      if (hg > ag) return BetSelection.HOME;
+      if (hg < ag) return BetSelection.AWAY;
+      return BetSelection.DRAW;
+    }
+
+    const normalized = String(match.result ?? '')
+      .trim()
+      .toLowerCase();
+
+    if (normalized === 'h' || normalized === 'home') return BetSelection.HOME;
+    if (normalized === 'd' || normalized === 'draw') return BetSelection.DRAW;
+    if (normalized === 'a' || normalized === 'away') return BetSelection.AWAY;
+    return null;
+  }
+
+  private async settleSingleBet(
+    betId: string,
+    outcome: BetSelection,
+    settledBy: string,
+  ): Promise<boolean> {
+    const result = await this.settleSingleBetWithDetails(
+      betId,
+      outcome,
+      settledBy,
+    );
+    return result.settled;
+  }
+
+  private async settleSingleBetWithDetails(
+    betId: string,
+    outcome: BetSelection,
+    settledBy: string,
+  ): Promise<{
+    settled: boolean;
+    won: boolean;
+    payout: number;
+    userId: string | null;
+    balanceAfter: number | null;
+  }> {
+    return this.dataSource.transaction(async (manager) => {
+      const lockedBet = await manager
+        .createQueryBuilder(Bet, 'bet')
+        .where('bet.id = :betId', { betId })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!lockedBet) {
+        return {
+          settled: false,
+          won: false,
+          payout: 0,
+          userId: null,
+          balanceAfter: null,
+        };
+      }
+
+      if (
+        lockedBet.status !== BetStatus.PENDING ||
+        Boolean(lockedBet.payoutCredited)
+      ) {
+        return {
+          settled: false,
+          won: false,
+          payout: 0,
+          userId: null,
+          balanceAfter: null,
+        };
+      }
+
       const now = new Date();
+      const won = lockedBet.selection === outcome;
+      let balanceAfter: number | null = null;
+      let payout = 0;
 
-      // Mettre à jour le statut du pari
-      bet.status = won ? BetStatus.WON : BetStatus.LOST;
-      bet.settledAt = now;
-      await manager.save(Bet, bet);
+      lockedBet.status = won ? BetStatus.WON : BetStatus.LOST;
+      lockedBet.result = outcome;
+      lockedBet.settledAt = now;
+      lockedBet.settledBy = settledBy;
+      lockedBet.payoutCredited = won ? true : false;
 
-      // Si le pari est gagné → créditer le wallet du joueur
       if (won) {
-        const payout = Number(Number(bet.potentialPayout).toFixed(2));
-
-        // Récupérer l'utilisateur avec lock (évite les doublons de crédit)
+        payout = Number(Number(lockedBet.potentialPayout).toFixed(2));
         const user = await manager
           .createQueryBuilder(User, 'user')
-          .where('user.id = :userId', { userId: bet.userId })
+          .where('user.id = :userId', { userId: lockedBet.userId })
           .setLock('pessimistic_write')
           .getOne();
 
         if (!user) {
-          this.logger.error(
-            `Utilisateur ${bet.userId} introuvable pour le pari ${bet.id}`,
-          );
-          return;
+          throw new Error(`User ${lockedBet.userId} not found`);
         }
 
-        const balanceBefore = Number(user.balance ?? 0);
-        const balanceAfter = Number((balanceBefore + payout).toFixed(2));
-
-        user.balance = balanceAfter;
+        const pointsBefore = Number(user.points ?? 0);
+        balanceAfter = Number((pointsBefore + payout).toFixed(2));
+        user.points = balanceAfter;
         await manager.save(User, user);
 
-        // Enregistrer la transaction de gain dans l'historique wallet
         const transaction = manager.create(WalletTransaction, {
-          userId: bet.userId,
+          userId: lockedBet.userId,
           type: TransactionType.WIN,
           amount: payout,
         });
         await manager.save(WalletTransaction, transaction);
-
-        this.logger.log(
-          `💰 Pari ${bet.id} GAGNÉ — payout: ${payout}, ` +
-            `nouveau solde user ${bet.userId}: ${balanceAfter}`,
-        );
-      } else {
-        this.logger.log(`❌ Pari ${bet.id} PERDU (user: ${bet.userId})`);
       }
+
+      await manager.save(Bet, lockedBet);
+      return {
+        settled: true,
+        won,
+        payout,
+        userId: lockedBet.userId,
+        balanceAfter,
+      };
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // SUPABASE : récupération des résultats de matchs
-  // ─────────────────────────────────────────────────────────────────────────
+  private mapSupabaseMatch(raw: Record<string, any>): MatchResult {
+    return {
+      id: String(raw.id),
+      status: String(raw.status ?? ''),
+      result: raw.result == null ? null : String(raw.result),
+      home_goals: raw.home_goals == null ? null : Number(raw.home_goals),
+      away_goals: raw.away_goals == null ? null : Number(raw.away_goals),
+    };
+  }
 
   private async fetchMatchResults(
     matchIds: string[],
@@ -294,12 +385,15 @@ export class BetsSettlementService {
 
     const map = new Map<string, MatchResult>();
     for (const row of data ?? []) {
+      const hg = row.home_goals;
+      const ag = row.away_goals;
+
       map.set(row.id as string, {
         id: row.id as string,
         status: row.status as string,
         result: row.result as string | null,
-        home_goals: Number(row.home_goals ?? 0),
-        away_goals: Number(row.away_goals ?? 0),
+        home_goals: hg == null ? null : Number(hg),
+        away_goals: ag == null ? null : Number(ag),
       });
     }
 

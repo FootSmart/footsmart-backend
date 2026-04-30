@@ -34,6 +34,71 @@ export class BetsService {
 		return 0;
 	}
 
+	private parseDate(value: unknown): Date | null {
+		if (!value) return null;
+		if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+		if (typeof value === 'string' || typeof value === 'number') {
+			const d = new Date(value);
+			return Number.isNaN(d.getTime()) ? null : d;
+		}
+		return null;
+	}
+
+	private computeBetCloseAt(match: {
+		match_date?: string | null;
+		match_time?: string | null;
+		bet_closes_at?: string | null;
+	}): Date | null {
+		const explicit = this.parseDate(match.bet_closes_at);
+		if (explicit) return explicit;
+
+		const kickoffFromDate = this.parseDate(match.match_date);
+		if (!kickoffFromDate) return null;
+
+		let kickoff = new Date(kickoffFromDate);
+		const rawTime = (match.match_time ?? '').trim();
+		if (rawTime) {
+			const parsed = rawTime.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+			if (parsed) {
+				const h = Number(parsed[1]);
+				const m = Number(parsed[2]);
+				const s = Number(parsed[3] ?? '0');
+				if (!Number.isNaN(h) && !Number.isNaN(m) && !Number.isNaN(s)) {
+					kickoff = new Date(kickoffFromDate);
+					kickoff.setUTCHours(h, m, s, 0);
+				}
+			}
+		}
+
+		return new Date(kickoff.getTime() - 5 * 60 * 1000);
+	}
+
+	private resolveBettingWindow(match: {
+		status?: string | null;
+		match_date?: string | null;
+		match_time?: string | null;
+		bet_closes_at?: string | null;
+	}): { betClosesAt: Date | null; isBettingOpen: boolean; secondsUntilClose: number } {
+		const now = new Date();
+		const betClosesAt = this.computeBetCloseAt(match);
+		if (!betClosesAt) {
+			return {
+				betClosesAt: null,
+				isBettingOpen: match.status === 'scheduled',
+				secondsUntilClose: 0,
+			};
+		}
+
+		const secondsUntilClose = Math.max(
+			0,
+			Math.floor((betClosesAt.getTime() - now.getTime()) / 1000),
+		);
+		const isBettingOpen =
+			match.status === 'scheduled' && now.getTime() < betClosesAt.getTime();
+
+		return { betClosesAt, isBettingOpen, secondsUntilClose };
+	}
+
 	private mapBet(bet: Bet) {
 		return {
 			id: bet.id,
@@ -47,6 +112,8 @@ export class BetsService {
 			odds: this.toNumber(bet.odds),
 			potentialPayout: this.toNumber(bet.potentialPayout),
 			status: bet.status,
+			result: bet.result ?? null,
+			payoutCredited: Boolean(bet.payoutCredited),
 			settledAt: bet.settledAt,
 			createdAt: bet.createdAt,
 			updatedAt: bet.updatedAt,
@@ -69,10 +136,16 @@ export class BetsService {
 		}
 	}
 
-	private async ensureMatchBettable(matchId: string): Promise<void> {
+	private async getMatchForBetting(matchId: string): Promise<{
+		id: string;
+		status: string;
+		match_date: string | null;
+		match_time: string | null;
+		bet_closes_at: string | null;
+	}> {
 		const { data, error } = await this.db
 			.from('matches')
-			.select('id, status')
+			.select('id, status, match_date, match_time, bet_closes_at')
 			.eq('id', matchId)
 			.maybeSingle();
 
@@ -86,21 +159,48 @@ export class BetsService {
 			throw new NotFoundException(`Match ${matchId} not found`);
 		}
 
-		if (data.status !== 'scheduled') {
+		return {
+			id: String(data.id),
+			status: String(data.status ?? ''),
+			match_date: (data.match_date as string | null) ?? null,
+			match_time: (data.match_time as string | null) ?? null,
+			bet_closes_at: (data.bet_closes_at as string | null) ?? null,
+		};
+	}
+
+	private ensureMatchBettable(match: {
+		status: string;
+		match_date: string | null;
+		match_time: string | null;
+		bet_closes_at: string | null;
+	}): { betClosesAt: Date | null; isBettingOpen: boolean; secondsUntilClose: number } {
+		if (match.status !== 'scheduled') {
 			throw new BadRequestException(
-				'Bets can only be placed on upcoming (scheduled) matches',
+				'Match not scheduled',
 			);
 		}
+
+		const window = this.resolveBettingWindow(match);
+		if (!window.isBettingOpen) {
+			throw new BadRequestException('Betting closed');
+		}
+
+		return window;
 	}
 
 	async getMatchOdds(matchId: string): Promise<MatchOddsDto> {
-		const { data, error } = await this.db
+		const [match, oddsRes] = await Promise.all([
+			this.getMatchForBetting(matchId),
+			this.db
 			.from('match_odds')
 			.select(
 				'match_id,home_team,away_team,home_prob,draw_prob,away_prob,home_odds,draw_odds,away_odds',
 			)
 			.eq('match_id', matchId)
-			.limit(1);
+			.limit(1),
+		]);
+
+		const { data, error } = oddsRes;
 
 		if (error) {
 			throw new InternalServerErrorException(
@@ -109,10 +209,11 @@ export class BetsService {
 		}
 
 		if (!data || data.length === 0) {
-			throw new NotFoundException(`No odds found for match ${matchId}`);
+			throw new NotFoundException('Odds missing');
 		}
 
 		const row = data[0];
+		const window = this.resolveBettingWindow(match);
 
 		return {
 			matchId: row.match_id,
@@ -124,14 +225,18 @@ export class BetsService {
 			homeOdds: this.toNumber(row.home_odds),
 			drawOdds: this.toNumber(row.draw_odds),
 			awayOdds: this.toNumber(row.away_odds),
+			betClosesAt: window.betClosesAt?.toISOString() ?? null,
+			isBettingOpen: window.isBettingOpen,
+			secondsUntilClose: window.secondsUntilClose,
 		};
 	}
 
 	async placeBet(userId: string, placeBetDto: PlaceBetDto) {
-		const [matchOdds] = await Promise.all([
+		const [match, matchOdds] = await Promise.all([
+			this.getMatchForBetting(placeBetDto.matchId),
 			this.getMatchOdds(placeBetDto.matchId),
-			this.ensureMatchBettable(placeBetDto.matchId),
 		]);
+		this.ensureMatchBettable(match);
 
 		const stake = Number(Number(placeBetDto.stake).toFixed(2));
 		if (!Number.isFinite(stake) || stake <= 0) {
@@ -152,14 +257,20 @@ export class BetsService {
 				throw new NotFoundException('User not found');
 			}
 
-			const pointsBefore = this.toNumber(user.points);
-			if (pointsBefore < stake) {
-				throw new BadRequestException(
-					`Insufficient points. Current points: ${pointsBefore}, stake: ${stake.toFixed(2)}`,
-				);
+			if (!user.is18Plus) {
+				throw new ForbiddenException('You must be 18+ to place bets');
 			}
 
-			const pointsAfter = pointsBefore - stake;
+			if (user.accountStatus !== 'active') {
+				throw new ForbiddenException('Account status is not active');
+			}
+
+			const pointsBefore = this.toNumber(user.points);
+			if (pointsBefore < stake) {
+				throw new BadRequestException('Insufficient points');
+			}
+
+			const pointsAfter = Number((pointsBefore - stake).toFixed(2));
 
 			user.points = pointsAfter;
 			await manager.save(User, user);
@@ -167,7 +278,7 @@ export class BetsService {
 			const walletTransaction = manager.create(WalletTransaction, {
 				userId,
 				type: TransactionType.BET,
-				amount: stake,
+				amount: -stake,
 			});
 			await manager.save(WalletTransaction, walletTransaction);
 
@@ -182,6 +293,7 @@ export class BetsService {
 				odds: selected.odds,
 				potentialPayout,
 				status: BetStatus.PENDING,
+				payoutCredited: false,
 			});
 
 			await manager.save(Bet, bet);
@@ -189,9 +301,9 @@ export class BetsService {
 			return {
 				bet,
 				wallet: {
-					pointsBefore,
-					pointsAfter,
-					debited: stake,
+					pointsBefore: Math.trunc(pointsBefore),
+					pointsAfter: Math.trunc(pointsAfter),
+					debited: Math.trunc(stake),
 				},
 			};
 		});
@@ -224,7 +336,26 @@ export class BetsService {
 		const [bets, total] = await query.getManyAndCount();
 
 		return {
-			bets: bets.map((bet) => this.mapBet(bet)),
+			bets: bets.map((bet) => {
+				const mapped = this.mapBet(bet);
+				return {
+					id: mapped.id,
+					homeTeam: mapped.homeTeam,
+					awayTeam: mapped.awayTeam,
+					selectionLabel: mapped.selectionLabel,
+					selection: mapped.selection,
+					stake: mapped.stake,
+					odds: mapped.odds,
+					potentialPayout: mapped.potentialPayout,
+					status: mapped.status,
+					createdAt: mapped.createdAt,
+					settledAt: mapped.settledAt,
+					result: mapped.result,
+					payoutCredited: mapped.payoutCredited,
+					userId: mapped.userId,
+					matchId: mapped.matchId,
+				};
+			}),
 			total,
 			limit,
 			offset,

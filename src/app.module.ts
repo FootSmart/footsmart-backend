@@ -16,6 +16,7 @@ import { BetsModule } from './bets/bets.module';
 import { PaymentsModule } from './payments/payments.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SchemaInitService } from './database/schema-init.service';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { SchemaInitService } from './database/schema-init.service';
     BetsModule,
     PaymentsModule,
     AnalyticsModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService, SchemaInitService],

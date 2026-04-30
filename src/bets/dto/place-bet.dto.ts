@@ -21,7 +21,7 @@ export class PlaceBetDto {
 
   @ApiProperty({
     example: 25,
-    description: 'Bet stake amount in USD',
+    description: 'Bet stake amount in points',
   })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
