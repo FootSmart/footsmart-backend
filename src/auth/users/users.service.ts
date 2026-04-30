@@ -52,7 +52,40 @@ export class UsersService {
       }
     }
 
+    if (updates.subscriptionActive !== undefined) {
+      payload.subscriptionActive = updates.subscriptionActive;
+    }
+
+    if (updates.subscriptionPlan !== undefined) {
+      payload.subscriptionPlan = updates.subscriptionPlan;
+    }
+
+    if (updates.subscriptionEndsAt !== undefined) {
+      payload.subscriptionEndsAt = updates.subscriptionEndsAt
+        ? new Date(updates.subscriptionEndsAt)
+        : null;
+    }
+
     await this.usersRepository.update({ id }, payload);
+    return this.findById(id);
+  }
+
+  async updateSubscription(
+    id: string,
+    data : {
+      subscriptionActive: boolean;
+      subscriptionPlan?: string | null;
+      subscriptionEndsAt?: Date | null;
+    },
+  ) {
+    await this.usersRepository.update(
+      { id },
+      {
+        subscriptionActive: data.subscriptionActive,
+        subscriptionPlan: data.subscriptionPlan ?? null,
+        subscriptionEndsAt: data.subscriptionEndsAt ?? null,
+      },
+    );
     return this.findById(id);
   }
 }

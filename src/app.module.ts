@@ -16,6 +16,8 @@ import { BetsModule } from './bets/bets.module';
 import { PaymentsModule } from './payments/payments.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SchemaInitService } from './database/schema-init.service';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+
 import { AdminModule } from './admin/admin.module';
 
 @Module({
@@ -77,6 +79,7 @@ import { AdminModule } from './admin/admin.module';
     BetsModule,
     PaymentsModule,
     AnalyticsModule,
+    SubscriptionsModule,
     AdminModule,
   ],
   controllers: [AppController],
