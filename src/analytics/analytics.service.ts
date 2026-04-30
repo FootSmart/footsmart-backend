@@ -682,4 +682,75 @@ export class AnalyticsService {
       };
     });
   }
+
+  // ─── E) Match Predictions (Supabase table) ──────────────────────────────
+
+  async getMatchPredictions(params: {
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const pageSize = Math.min(Math.max(1, params.pageSize ?? 10), 50);
+    const search = params.search?.trim();
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = this.db
+      .from('match_predictions')
+      .select(
+        'id, match_id, home_team, away_team, home_win_prob, draw_prob, away_win_prob, most_likely_score, confidence_score, created_at',
+        { count: 'exact' },
+      )
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (search) {
+      const term = `%${search}%`;
+      query = query.or(`home_team.ilike.${term},away_team.ilike.${term}`);
+    }
+
+    const { data, error, count } = await query;
+
+    if (error) {
+      throw new InternalServerErrorException(
+        `Failed to fetch match_predictions: ${error.message}`,
+      );
+    }
+
+    const total = count ?? 0;
+    const totalPages = total > 0 ? Math.ceil(total / pageSize) : 1;
+
+    const rows = (data ?? []) as Array<{
+      id: unknown;
+      match_id: unknown;
+      home_team: unknown;
+      away_team: unknown;
+      home_win_prob: unknown;
+      draw_prob: unknown;
+      away_win_prob: unknown;
+      most_likely_score: unknown;
+      confidence_score: unknown;
+      created_at: unknown;
+    }>;
+
+    return {
+      data: rows.map((r) => ({
+        id: r.id,
+        matchId: r.match_id,
+        homeTeam: r.home_team,
+        awayTeam: r.away_team,
+        homeWinProb: this.toNum(r.home_win_prob),
+        drawProb: this.toNum(r.draw_prob),
+        awayWinProb: this.toNum(r.away_win_prob),
+        mostLikelyScore: r.most_likely_score,
+        confidenceScore: this.toNum(r.confidence_score),
+        createdAt: r.created_at,
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages,
+    };
+  }
 }

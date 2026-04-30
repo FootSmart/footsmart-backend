@@ -114,4 +114,43 @@ export class AnalyticsController {
   ) {
     return this.analyticsService.getPredictions(leagueId, limit);
   }
+
+  // ─── GET /analytics/match-predictions ───────────────────────────────────
+
+  @Get('match-predictions')
+  @ApiOperation({
+    summary: 'Get match predictions from Supabase table',
+    description:
+      'Returns paginated predictions from match_predictions with optional team search.',
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Search by home or away team name',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    description: 'Page number (default: 1)',
+  })
+  @ApiQuery({
+    name: 'pageSize',
+    required: false,
+    type: Number,
+    description: 'Items per page (default: 10)',
+  })
+  @ApiOkResponse({ description: 'Match predictions returned successfully.' })
+  getMatchPredictions(
+    @Query('search') search?: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('pageSize', new DefaultValuePipe(10), ParseIntPipe) pageSize?: number,
+  ) {
+    return this.analyticsService.getMatchPredictions({
+      search,
+      page,
+      pageSize,
+    });
+  }
 }
