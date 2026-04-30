@@ -14,6 +14,7 @@ export class SchemaInitService implements OnModuleInit {
   async onModuleInit() {
     // Toujours : colonne users.balance (sinon GET /wallet/* → 500 si la table users existe sans cette colonne)
     await this.ensureUsersBalanceColumn();
+    await this.ensureBetLifecycleColumns();
 
     const enabledRaw = this.configService.get<string>('AUTO_CREATE_SCHEMA');
     const enabled = enabledRaw === 'true' || enabledRaw === '1';
@@ -186,6 +187,29 @@ CREATE INDEX IF NOT EXISTS "IDX_bets_user_id_created_at"
         WHERE "stripe_payment_intent_id" IS NOT NULL;
       `);
       this.logger.log('Stripe DB columns: OK');
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /** Colonnes additionnelles du cycle de pari (idempotent). */
+  private async ensureBetLifecycleColumns() {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query(`
+        ALTER TABLE "matches" ADD COLUMN IF NOT EXISTS "bet_closes_at" timestamptz NULL;
+      `);
+      await runner.query(`
+        ALTER TABLE "bets" ADD COLUMN IF NOT EXISTS "payout_credited" boolean NOT NULL DEFAULT false;
+      `);
+      await runner.query(`
+        ALTER TABLE "bets" ADD COLUMN IF NOT EXISTS "result" text NULL;
+      `);
+      await runner.query(`
+        ALTER TABLE "bets" ADD COLUMN IF NOT EXISTS "settled_by" text NULL;
+      `);
+      this.logger.log('Bet lifecycle columns: OK');
     } finally {
       await runner.release();
     }

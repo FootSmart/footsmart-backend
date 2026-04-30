@@ -71,6 +71,15 @@ export class Bet {
   @Column({ name: 'settled_at', type: 'timestamptz', nullable: true })
   settledAt?: Date;
 
+  @Column({ name: 'payout_credited', default: false })
+  payoutCredited: boolean;
+
+  @Column({ nullable: true })
+  result?: string;
+
+  @Column({ name: 'settled_by', nullable: true })
+  settledBy?: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
