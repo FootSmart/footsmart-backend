@@ -528,6 +528,60 @@ export class MatchesService {
   }
 
   /**
+   * GET /matches/team/:teamId/history – finished matches for a team
+   *
+   * Uses real DB columns (status, home_goals, away_goals) to determine
+   * finished matches. external_id is NEVER parsed to infer result/status.
+   */
+  async getTeamMatchHistory(
+    teamId: string,
+    limit = 20,
+    offset = 0,
+  ): Promise<MatchListResponseDto> {
+    this.logger.debug(`getTeamMatchHistory teamId=${teamId}`);
+
+    const [homeRes, awayRes] = await Promise.all([
+      this.db
+        .from('matches')
+        .select(MATCH_SELECT, { count: 'exact' })
+        .eq('home_team_id', teamId)
+        .or('status.eq.finished,and(home_goals.not.is.null,away_goals.not.is.null)'),
+      this.db
+        .from('matches')
+        .select(MATCH_SELECT, { count: 'exact' })
+        .eq('away_team_id', teamId)
+        .or('status.eq.finished,and(home_goals.not.is.null,away_goals.not.is.null)'),
+    ]);
+
+    if (homeRes.error) throw new InternalServerErrorException(homeRes.error.message);
+    if (awayRes.error) throw new InternalServerErrorException(awayRes.error.message);
+
+    const combined = [...(homeRes.data || []), ...(awayRes.data || [])];
+    const unique = this.dedupeMatches(combined);
+    this.logger.debug(
+      `getTeamMatchHistory beforeDedupe=${combined.length} afterDedupe=${unique.length}`,
+    );
+
+    const sorted = unique.sort((a, b) => {
+      const dateA = new Date(a.match_date ?? 0).getTime();
+      const dateB = new Date(b.match_date ?? 0).getTime();
+      if (dateB !== dateA) return dateB - dateA;
+      // secondary: match_time descending
+      return String(b.match_time ?? '').localeCompare(String(a.match_time ?? ''));
+    });
+
+    const total = sorted.length;
+    const paged = sorted.slice(offset, offset + limit);
+
+    return {
+      matches: paged.map((m) => this.mapMatch(m)),
+      total,
+      limit,
+      offset,
+    };
+  }
+
+  /**
    * GET /matches/team/:teamId/fixtures – next N upcoming matches
    */
   async getTeamFixtures(teamId: string, limit = 5): Promise<MatchDto[]> {

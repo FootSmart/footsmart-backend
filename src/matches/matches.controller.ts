@@ -143,6 +143,30 @@ export class MatchesController {
   }
 
   /**
+   * GET /matches/team/:teamId/history
+   * Finished match history for a team – uses status/goals columns, never external_id
+   */
+  @Get('team/:teamId/history')
+  @ApiParam({ name: 'teamId', description: 'Team UUID' })
+  @ApiQuery({ name: 'limit', required: false, example: 20 })
+  @ApiQuery({ name: 'offset', required: false, example: 0 })
+  @ApiOperation({
+    summary: 'Team match history',
+    description:
+      'Finished matches for a team (home & away), sorted newest first. ' +
+      'Determined by status=finished OR goals present. ' +
+      'Does NOT use external_id for filtering.',
+  })
+  @ApiResponse({ status: 200, type: MatchListResponseDto })
+  async getTeamMatchHistory(
+    @Param('teamId') teamId: string,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
+    @Query('offset', new ParseIntPipe({ optional: true })) offset = 0,
+  ): Promise<MatchListResponseDto> {
+    return this.matchesService.getTeamMatchHistory(teamId, limit, offset);
+  }
+
+  /**
    * GET /matches/:id
    * Single match with full event timeline
    */
