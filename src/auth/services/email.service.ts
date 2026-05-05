@@ -75,8 +75,8 @@ export class EmailService {
     userName?: string,
   ): Promise<boolean> {
     try {
-      const appName = this.configService.get<string>('APP_NAME', 'FootSmart Pro');
-      const deepLink = this.configService.get<string>('RESET_REDIRECT_URL', 'myapp://reset-password');
+      const appName = this.configService.get<string>('APP_NAME', 'FootSmart');
+      const deepLink = this.configService.get<string>('RESET_REDIRECT_URL', 'footsmart://reset-password');
       const fromEmail = this.configService.get<string>('SMTP_FROM_EMAIL', 'noreply@footsmart.com');
       
       // Construct deep link for Flutter app

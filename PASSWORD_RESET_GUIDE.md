@@ -42,13 +42,14 @@ CREATE TABLE password_reset_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token VARCHAR(255) NOT NULL UNIQUE,  -- SHA-256 hashed token
-  expires_at TIMESTAMP NOT NULL,
+  "expiresAt" TIMESTAMP NULL,
   used BOOLEAN DEFAULT false,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_password_reset_token ON password_reset_tokens(token);
-CREATE INDEX idx_password_reset_user_id ON password_reset_tokens(user_id);
+CREATE INDEX idx_password_reset_tokens_token ON password_reset_tokens(token);
+CREATE INDEX idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+CREATE INDEX idx_password_reset_tokens_expires_at ON password_reset_tokens("expiresAt");
 ```
 
 ---
@@ -108,8 +109,9 @@ SMTP_PASS=your-app-password  # Generate from Google Account settings
 SMTP_FROM_EMAIL=noreply@footsmartpro.com
 
 # Password Reset
-RESET_REDIRECT_URL=myapp://reset-password  # Flutter deep link
-APP_NAME=FootSmart Pro
+RESET_REDIRECT_URL=footsmart://reset-password  # Flutter deep link
+WEB_RESET_URL=
+APP_NAME=FootSmart
 
 # Database
 DB_HOST=localhost
@@ -144,7 +146,7 @@ npm run start:dev
 
 ### 1. Request Password Reset
 
-**Endpoint:** `POST /auth/forgot-password`
+**Endpoint:** `POST /api/auth/forgot-password`
 
 **Request Body:**
 ```json
@@ -168,7 +170,7 @@ npm run start:dev
 
 **cURL Example:**
 ```bash
-curl -X POST http://localhost:3001/auth/forgot-password \
+curl -X POST http://localhost:3001/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com"}'
 ```
@@ -177,7 +179,7 @@ curl -X POST http://localhost:3001/auth/forgot-password \
 
 ### 2. Reset Password
 
-**Endpoint:** `POST /auth/reset-password`
+**Endpoint:** `POST /api/auth/reset-password`
 
 **Request Body:**
 ```json
@@ -225,7 +227,7 @@ curl -X POST http://localhost:3001/auth/forgot-password \
 
 **cURL Example:**
 ```bash
-curl -X POST http://localhost:3001/auth/reset-password \
+curl -X POST http://localhost:3001/api/auth/reset-password \
   -H "Content-Type: application/json" \
   -d '{
     "token":"abc123def456...",
@@ -237,7 +239,7 @@ curl -X POST http://localhost:3001/auth/reset-password \
 
 ### 3. Verify Reset Token (Optional)
 
-**Endpoint:** `POST /auth/verify-reset-token`
+**Endpoint:** `POST /api/auth/verify-reset-token`
 
 Useful for Flutter to check token validity before showing password form.
 
@@ -267,7 +269,7 @@ Useful for Flutter to check token validity before showing password form.
 
 **cURL Example:**
 ```bash
-curl -X POST http://localhost:3001/auth/verify-reset-token \
+curl -X POST http://localhost:3001/api/auth/verify-reset-token \
   -H "Content-Type: application/json" \
   -d '{"token":"abc123def456..."}'
 ```
@@ -478,7 +480,7 @@ If you didn't request a password reset, please ignore this email.
 
 ### Test Forgot Password
 ```bash
-curl -X POST http://localhost:3001/auth/forgot-password \
+curl -X POST http://localhost:3001/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{"email":"test@example.com"}'
 ```
@@ -490,7 +492,7 @@ curl -X POST http://localhost:3001/auth/forgot-password \
 
 ### Test Reset Password
 ```bash
-curl -X POST http://localhost:3001/auth/reset-password \
+curl -X POST http://localhost:3001/api/auth/reset-password \
   -H "Content-Type: application/json" \
   -d '{
     "token":"<PASTE_TOKEN_HERE>",
@@ -502,11 +504,32 @@ curl -X POST http://localhost:3001/auth/reset-password \
 ```bash
 # Send 4 requests quickly (should get 429 on 4th)
 for i in {1..4}; do
-  curl -X POST http://localhost:3001/auth/forgot-password \
+  curl -X POST http://localhost:3001/api/auth/forgot-password \
     -H "Content-Type: application/json" \
     -d '{"email":"test@example.com"}'
   echo ""
 done
+
+---
+
+## 🚀 Railway Environment Variables
+
+```bash
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM_EMAIL=
+APP_NAME=FootSmart
+RESET_REDIRECT_URL=footsmart://reset-password
+WEB_RESET_URL=
+```
+
+Notes:
+- Gmail requires an App Password, not your normal account password.
+- Redeploy the backend after changing Railway variables.
 ```
 
 ---

@@ -115,7 +115,8 @@ export class AuthService {
    * - Generic response message (prevents email enumeration)
    */
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
-    const { email } = forgotPasswordDto;
+    const rawEmail = forgotPasswordDto.email ?? '';
+    const email = rawEmail.trim().toLowerCase();
     
     this.logger.log(`Password reset requested for email: ${email}`);
     
@@ -189,6 +190,10 @@ export class AuthService {
 
     this.logger.log('Password reset attempt initiated');
 
+    if (!rawToken) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
     // Hash the submitted token to match against stored hash
     const hashedToken = this.hashToken(rawToken);
 
@@ -208,7 +213,7 @@ export class AuthService {
       throw new BadRequestException('This reset token has already been used');
     }
 
-    if (resetToken.expiresAt < new Date()) {
+    if (!resetToken.expiresAt || resetToken.expiresAt < new Date()) {
       this.logger.warn(`Expired reset token submitted for user: ${resetToken.userId}`);
       throw new BadRequestException('Reset token has expired. Please request a new password reset.');
     }
@@ -223,6 +228,12 @@ export class AuthService {
     resetToken.used = true;
     await this.passwordResetTokenRepository.save(resetToken);
 
+    // Optional cleanup: remove any other active tokens for this user
+    await this.passwordResetTokenRepository.delete({
+      userId: resetToken.userId,
+      used: false,
+    });
+
     this.logger.log(`Password successfully reset for user: ${resetToken.user.email}`);
 
     return {
@@ -236,6 +247,12 @@ export class AuthService {
    * Allows Flutter to check if token is valid before showing password form
    */
   async verifyResetToken(rawToken: string) {
+    if (!rawToken) {
+      return {
+        valid: false,
+        message: 'Invalid reset token',
+      };
+    }
     const hashedToken = this.hashToken(rawToken);
     
     const resetToken = await this.passwordResetTokenRepository.findOne({
@@ -257,7 +274,7 @@ export class AuthService {
       };
     }
 
-    if (resetToken.expiresAt < new Date()) {
+    if (!resetToken.expiresAt || resetToken.expiresAt < new Date()) {
       return {
         valid: false,
         message: 'Reset token has expired',
@@ -267,7 +284,7 @@ export class AuthService {
     return {
       valid: true,
       message: 'Token is valid',
-      email: resetToken.user.email, // Can show masked email to user
+      email: this.maskEmail(resetToken.user.email),
     };
   }
 
@@ -285,5 +302,12 @@ export class AuthService {
    */
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private maskEmail(email: string): string {
+    const [name, domain] = email.split('@');
+    if (!name || !domain) return '***';
+    const visible = name.length <= 2 ? name[0] : name.slice(0, 2);
+    return `${visible}***@${domain}`;
   }
 }
