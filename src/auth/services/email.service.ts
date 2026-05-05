@@ -30,32 +30,21 @@ export class EmailService {
 
     if (emailProvider === 'smtp') {
       const smtpHost = this.configService.get<string>('SMTP_HOST');
-      
-      // Use Gmail service if Gmail is detected
-      if (smtpHost?.includes('gmail')) {
-        this.transporter = nodemailer.createTransport({
-          service: 'gmail',
-          auth: {
-            user: this.configService.get<string>('SMTP_USER'),
-            pass: this.configService.get<string>('SMTP_PASS'),
-          },
-        });
-      } else {
-        // SMTP configuration for other providers
-        this.transporter = nodemailer.createTransport({
-          host: smtpHost,
-          port: this.configService.get<number>('SMTP_PORT', 587),
-          secure: this.configService.get<boolean>('SMTP_SECURE', false),
-          requireTLS: true,
-          auth: {
-            user: this.configService.get<string>('SMTP_USER'),
-            pass: this.configService.get<string>('SMTP_PASS'),
-          },
-          tls: {
-            rejectUnauthorized: false,
-          },
-        });
-      }
+
+      // SMTP configuration (Gmail or other providers)
+      this.transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: this.configService.get<number>('SMTP_PORT', 587),
+        secure: this.configService.get<boolean>('SMTP_SECURE', false),
+        requireTLS: true,
+        auth: {
+          user: this.configService.get<string>('SMTP_USER'),
+          pass: this.configService.get<string>('SMTP_PASS'),
+        },
+        tls: {
+          rejectUnauthorized: false,
+        },
+      });
     }
     // Add other providers (SendGrid, etc.) here if needed
 
