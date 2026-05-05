@@ -37,6 +37,8 @@ export class AuthService {
         email: user.email,
         displayName: user.displayName,
         role: user.role,
+        accountStatus: user.accountStatus,
+        kycStatus: user.kycStatus,
       },
     };
   }
@@ -91,12 +93,15 @@ export class AuthService {
       club: registerDto.club,
       avatarUrl: registerDto.avatarUrl,
       kycStatus: 'not_started',
-      accountStatus: 'active',
+      accountStatus: 'inactive',
       balance: 0,
     });
 
     // Return JWT token
-    return this.signToken(user);
+    return {
+      ...this.signToken(user),
+      next_step: 'kyc_required',
+    };
   }
 
   /**

@@ -19,6 +19,7 @@ import {
 import { BetsService } from './bets.service';
 import { PlaceBetDto } from './dto/place-bet.dto';
 import { JwtGuard } from '../auth/jwt.guard';
+import { ActiveKycGuard } from '../auth/guards/active-kyc.guard';
 import { BetStatus } from './entities/bet.entity';
 
 @ApiTags('Bets')
@@ -45,7 +46,7 @@ export class BetsController {
   }
 
   @Post('place')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Place a new bet',

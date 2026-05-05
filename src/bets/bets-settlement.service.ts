@@ -79,31 +79,28 @@ export class BetsSettlementService {
   async settleAllPendingBetsDetailed(
     settledBy = 'manual-api',
   ): Promise<SettlementCounts> {
-    const { data: bets, error } = await this.db
-      .from('bets')
-      .select('*, matches(*)')
-      .eq('status', BetStatus.PENDING);
+    const pendingBets = await this.betRepository
+      .createQueryBuilder('bet')
+      .where('bet.status = :status', { status: BetStatus.PENDING })
+      .andWhere('(bet.payoutCredited = :credited OR bet.payoutCredited IS NULL)', {
+        credited: false,
+      })
+      .getMany();
 
-    if (error) {
-      throw new Error(`Failed to fetch pending bets: ${error.message}`);
-    }
+    this.logger.log(`Settlement fetch: total pending bets=${pendingBets.length}`);
 
-    const rows = (bets ?? []) as Array<Record<string, any>>;
-    this.logger.log(`Settlement fetch: total pending bets=${rows.length}`);
-
-    for (const row of rows) {
-      const match = row.matches;
-      this.logger.debug(
-        `Settlement candidate bet=${row.id} match=${match?.id ?? 'n/a'} status=${match?.status ?? 'n/a'}`,
-      );
-    }
-
-    const eligibleRows = rows.filter(
-      (bet) =>
-        bet.matches &&
-        String(bet.matches.status).toLowerCase() === 'finished' &&
-        (bet.payout_credited === false || bet.payout_credited == null),
+    const matchResults = await this.fetchMatchResults(
+      pendingBets.map((bet) => bet.matchId),
     );
+
+    const eligibleRows = pendingBets.filter((bet) => {
+      const match = matchResults.get(String(bet.matchId));
+      this.logger.debug(
+        `Settlement candidate bet=${bet.id} match=${match?.id ?? 'n/a'} status=${match?.status ?? 'n/a'}`,
+      );
+
+      return match && String(match.status).toLowerCase() === 'finished';
+    });
 
     this.logger.log(`Settlement eligible bets=${eligibleRows.length}`);
 
@@ -114,8 +111,13 @@ export class BetsSettlementService {
     let lostCount = 0;
 
     for (const row of eligibleRows) {
-      const matchResult = this.mapSupabaseMatch(row.matches);
+      const matchResult = matchResults.get(String(row.matchId));
       const betId = String(row.id);
+
+      if (!matchResult) {
+        this.logger.warn(`Match ${row.matchId} not found for bet ${betId}`);
+        continue;
+      }
 
       const outcome = this.resolveMatchOutcome(matchResult);
       if (!outcome) {
@@ -126,7 +128,7 @@ export class BetsSettlementService {
       const settled = await this.settleSingleBet(betId, outcome, settledBy);
       if (settled) {
         settledCount++;
-        if (String(row.selection) === outcome) wonCount++;
+        if (row.selection === outcome) wonCount++;
         else lostCount++;
       }
     }

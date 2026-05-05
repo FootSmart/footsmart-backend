@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailService } from './services/email.service';
 import { PasswordResetRateLimitGuard } from './guards/password-reset-rate-limit.guard';
+import { ActiveKycGuard } from './guards/active-kyc.guard';
 import { getJwtExpiresIn, getJwtSecret } from './jwt-config.helper';
 
 @Module({
@@ -34,7 +35,8 @@ import { getJwtExpiresIn, getJwtSecret } from './jwt-config.helper';
     JwtGuard, 
     EmailService,
     PasswordResetRateLimitGuard,
+    ActiveKycGuard,
   ],
-  exports: [AuthService, JwtGuard, JwtModule],
+  exports: [AuthService, JwtGuard, JwtModule, ActiveKycGuard],
 })
 export class AuthModule {}

@@ -17,6 +17,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SchemaInitService } from './database/schema-init.service';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { KycModule } from './kyc/kyc.module';
 
 import { AdminModule } from './admin/admin.module';
 
@@ -80,6 +81,7 @@ import { AdminModule } from './admin/admin.module';
     PaymentsModule,
     AnalyticsModule,
     SubscriptionsModule,
+    KycModule,
     AdminModule,
   ],
   controllers: [AppController],

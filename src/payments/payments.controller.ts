@@ -18,6 +18,7 @@ import type { Request, Response } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtGuard } from '../auth/jwt.guard';
+import { ActiveKycGuard } from '../auth/guards/active-kyc.guard';
 import { User } from '../auth/users/entities/user.entity';
 import { rethrowStripeError } from './stripe-error.util';
 import { StripeService } from './stripe.service';
@@ -71,7 +72,7 @@ export class PaymentsController {
    * Achat d'un pack de points via Stripe Checkout.
    */
   @Post('stripe/buy-points-pack')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Acheter un pack de points',
@@ -297,7 +298,7 @@ export class PaymentsController {
    * Idempotent avec le webhook `setup_intent.succeeded`.
    */
   @Post('stripe/complete-setup')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Finaliser l’ajout de carte (attache la PM au Customer)',
@@ -333,7 +334,7 @@ export class PaymentsController {
   }
 
   @Post('stripe/setup-intent')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Créer un SetupIntent Stripe (PaymentSheet)',
@@ -375,7 +376,7 @@ export class PaymentsController {
    * (contourne les soucis DNS / api.stripe.com depuis le SDK natif sur certains appareils).
    */
   @Post('stripe/checkout-setup')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Session Checkout Stripe (enregistrer une carte)',
@@ -425,7 +426,7 @@ export class PaymentsController {
    * (ou en saisit une nouvelle) sur checkout.stripe.com.
    */
   @Post('stripe/checkout-deposit')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Session Checkout Stripe (dépôt wallet)',
@@ -514,7 +515,7 @@ export class PaymentsController {
    * Indispensable si le webhook Stripe n’atteint pas le serveur (ex. dev local).
    */
   @Post('stripe/complete-checkout-deposit')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Finaliser un dépôt Checkout (session Stripe)',
@@ -579,7 +580,7 @@ export class PaymentsController {
    * Finalise l'achat d'un pack de points après retour Stripe.
    */
   @Post('stripe/complete-points-pack')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Finaliser achat pack de points',
@@ -767,7 +768,7 @@ export class PaymentsController {
   }
 
   @Post('stripe/deposit-intent')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, ActiveKycGuard)
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({
     summary: 'Créer un PaymentIntent Stripe (dépôt wallet)',

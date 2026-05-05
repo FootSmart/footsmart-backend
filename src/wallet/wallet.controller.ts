@@ -17,6 +17,7 @@ import {
 } from '@nestjs/swagger';
 import { WalletService } from './wallet.service';
 import { JwtGuard } from '../auth/jwt.guard';
+import { ActiveKycGuard } from '../auth/guards/active-kyc.guard';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 
@@ -99,6 +100,7 @@ export class WalletController {
     summary: 'Deposit money',
     description: 'Add funds to your wallet',
   })
+  @UseGuards(ActiveKycGuard)
   @ApiResponse({
     status: 201,
     description: 'Deposit successful',
@@ -135,6 +137,7 @@ export class WalletController {
     summary: 'Withdraw money',
     description: 'Remove funds from your wallet',
   })
+  @UseGuards(ActiveKycGuard)
   @ApiResponse({
     status: 201,
     description: 'Withdrawal successful',

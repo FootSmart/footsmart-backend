@@ -14,6 +14,7 @@ export class SchemaInitService implements OnModuleInit {
   async onModuleInit() {
     // Toujours : colonne users.balance (sinon GET /wallet/* → 500 si la table users existe sans cette colonne)
     await this.ensureUsersBalanceColumn();
+    await this.ensureUserKycSchema();
     await this.ensureBetLifecycleColumns();
 
     const enabledRaw = this.configService.get<string>('AUTO_CREATE_SCHEMA');
@@ -37,6 +38,60 @@ export class SchemaInitService implements OnModuleInit {
     } catch (e) {
       this.logger.warn(
         `users.balance: impossible d'ajouter la colonne (${(e as Error).message}). Vérifie les droits DB.`,
+      );
+    } finally {
+      await runner.release();
+    }
+  }
+
+  /** Colonnes KYC + contrainte account_status alignÃ©es avec le code applicatif. */
+  private async ensureUserKycSchema() {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      await runner.query(`
+        ALTER TABLE "users"
+        ADD COLUMN IF NOT EXISTS "account_status" character varying(30) NOT NULL DEFAULT 'inactive',
+        ADD COLUMN IF NOT EXISTS "kyc_status" character varying(30) NOT NULL DEFAULT 'not_started',
+        ADD COLUMN IF NOT EXISTS "kyc_provider" character varying(50) NULL,
+        ADD COLUMN IF NOT EXISTS "kyc_reference_id" character varying(255) NULL,
+        ADD COLUMN IF NOT EXISTS "kyc_verified_at" timestamptz NULL,
+        ADD COLUMN IF NOT EXISTS "kyc_rejection_reason" text NULL;
+      `);
+
+      await runner.query(`
+        UPDATE "users"
+        SET "account_status" = COALESCE("account_status", 'inactive'),
+            "kyc_status" = COALESCE("kyc_status", 'not_started')
+        WHERE "account_status" IS NULL OR "kyc_status" IS NULL;
+      `);
+
+      await runner.query(`
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    WHERE t.relname = 'users'
+      AND c.conname = 'users_account_status_check'
+  ) THEN
+    ALTER TABLE "users" DROP CONSTRAINT "users_account_status_check";
+  END IF;
+END
+$$;
+      `);
+
+      await runner.query(`
+        ALTER TABLE "users"
+        ADD CONSTRAINT "users_account_status_check"
+        CHECK ("account_status" IN ('inactive', 'active', 'suspended', 'self_excluded'));
+      `);
+
+      this.logger.log('users KYC/account_status schema: OK');
+    } catch (e) {
+      this.logger.warn(
+        `users KYC/account_status schema: impossible de mettre Ã  jour (${(e as Error).message}).`,
       );
     } finally {
       await runner.release();

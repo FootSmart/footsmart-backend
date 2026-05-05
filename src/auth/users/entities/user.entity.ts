@@ -45,8 +45,20 @@ export class User {
   @Column({ name: 'kyc_status', default: 'not_started' })
   kycStatus: string;
 
-  @Column({ name: 'account_status', default: 'active' })
+  @Column({ name: 'account_status', default: 'inactive' })
   accountStatus: string;
+
+  @Column({ name: 'kyc_provider', nullable: true })
+  kycProvider?: string;
+
+  @Column({ name: 'kyc_reference_id', nullable: true })
+  kycReferenceId?: string;
+
+  @Column({ name: 'kyc_verified_at', type: 'timestamptz', nullable: true })
+  kycVerifiedAt?: Date | null;
+
+  @Column({ name: 'kyc_rejection_reason', type: 'text', nullable: true })
+  kycRejectionReason?: string | null;
 
   @Column({ nullable: true })
   club?: string;
