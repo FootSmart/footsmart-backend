@@ -260,8 +260,13 @@ This is an automated message. Please do not reply to this email.
    */
   async verifyConnection(): Promise<boolean> {
     try {
-      await this.transporter.verify();
-      this.logger.log('Email server connection verified successfully');
+      const apiKey = this.configService.get<string>('RESEND_API_KEY');
+      if (!apiKey) {
+        this.logger.error('RESEND_API_KEY is not configured');
+        return false;
+      }
+
+      this.logger.log('Resend API key is configured');
       return true;
     } catch (error) {
       this.logger.error(`Email server connection failed: ${error.message}`);
