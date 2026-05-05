@@ -92,21 +92,17 @@ Stored Hash: "3a7bd3e2990af0b07b8f7e6c1234567..." (in database)
 ### 1. Install Dependencies
 ```bash
 cd footsmart-backend
-npm install nodemailer @types/nodemailer
+npm install resend
 ```
 
 ### 2. Configure Environment Variables
 Copy `.env.example` to `.env` and configure:
 
 ```bash
-# Email Configuration (Gmail Example)
-EMAIL_PROVIDER=smtp
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=your-app-password  # Generate from Google Account settings
-SMTP_FROM_EMAIL=noreply@footsmartpro.com
+# Email Configuration (Resend)
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_xxxxxxxxx
+RESEND_FROM_EMAIL=onboarding@resend.dev
 
 # Password Reset
 RESET_REDIRECT_URL=footsmart://reset-password  # Flutter deep link

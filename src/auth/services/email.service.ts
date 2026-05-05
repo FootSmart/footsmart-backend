@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import { Transporter } from 'nodemailer';
+import { Resend } from 'resend';
 
 /**
  * Email Service for sending password reset emails
@@ -16,7 +15,7 @@ import { Transporter } from 'nodemailer';
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private transporter: Transporter;
+  private resend: Resend;
 
   constructor(private configService: ConfigService) {
     this.initializeTransporter();
@@ -26,28 +25,18 @@ export class EmailService {
    * Initialize email transporter based on configuration
    */
   private initializeTransporter() {
-    const emailProvider = this.configService.get<string>('EMAIL_PROVIDER', 'smtp');
+    const emailProvider = this.configService.get<string>('EMAIL_PROVIDER', 'resend');
 
-    if (emailProvider === 'smtp') {
-      const smtpHost = this.configService.get<string>('SMTP_HOST');
-
-      // SMTP configuration (Gmail or other providers)
-      this.transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: this.configService.get<number>('SMTP_PORT', 587),
-        secure: this.configService.get<boolean>('SMTP_SECURE', false),
-        requireTLS: true,
-        auth: {
-          user: this.configService.get<string>('SMTP_USER'),
-          pass: this.configService.get<string>('SMTP_PASS'),
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-      });
+    if (emailProvider !== 'resend') {
+      this.logger.warn(`EMAIL_PROVIDER=${emailProvider} is not supported. Using Resend.`);
     }
-    // Add other providers (SendGrid, etc.) here if needed
 
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    if (!apiKey) {
+      this.logger.error('RESEND_API_KEY is not configured');
+    }
+
+    this.resend = new Resend(apiKey || '');
     this.logger.log('Email transporter initialized successfully');
   }
 
@@ -66,7 +55,7 @@ export class EmailService {
     try {
       const appName = this.configService.get<string>('APP_NAME', 'FootSmart');
       const deepLink = this.configService.get<string>('RESET_REDIRECT_URL', 'footsmart://reset-password');
-      const fromEmail = this.configService.get<string>('SMTP_FROM_EMAIL', 'noreply@footsmart.com');
+      const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
       
       // Construct deep link for Flutter app
       // Format: myapp://reset-password?token=abc123
@@ -76,11 +65,8 @@ export class EmailService {
       const webLink = this.configService.get<string>('WEB_RESET_URL');
       const fallbackLink = webLink ? `${webLink}?token=${resetToken}` : resetLink;
 
-      const mailOptions = {
-        from: {
-          name: appName,
-          address: fromEmail,
-        },
+      const { data, error } = await this.resend.emails.send({
+        from: `${appName} <${fromEmail}>`,
         to: email,
         subject: `Reset Your ${appName} Password`,
         html: this.getPasswordResetEmailTemplate(
@@ -94,11 +80,13 @@ export class EmailService {
           resetLink,
           appName,
         ),
-      };
+      });
 
-      const info: any = await this.transporter.sendMail(mailOptions);
-      
-      this.logger.log(`Password reset email sent to ${email}. MessageId: ${info.messageId}`);
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      this.logger.log(`Password reset email sent to ${email}. Id: ${data?.id}`);
       return true;
     } catch (error) {
       this.logger.error(`Failed to send password reset email to ${email}: ${error.message}`);
