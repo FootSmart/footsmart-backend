@@ -1,5 +1,7 @@
-import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, HttpCode, HttpStatus, Get, Query, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -10,7 +12,10 @@ import { PasswordResetRateLimitGuard } from './guards/password-reset-rate-limit.
 @Controller('auth')
 @ApiTags('Auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('login')
   @ApiOperation({ summary: 'User login' })
@@ -123,5 +128,69 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Invalid or expired token' })
   verifyResetToken(@Body() body: { token: string }) {
     return this.authService.verifyResetToken(body.token);
+  }
+
+  @Get('reset-password-link')
+  @ApiOperation({
+    summary: 'Reset password landing page',
+    description: 'Redirects users to the mobile app using a secure deep link.',
+  })
+  resetPasswordLink(@Query('token') token: string, @Res() res: Response) {
+    if (!token) {
+      return res.status(HttpStatus.BAD_REQUEST).type('html').send(`
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <title>FootSmart Password Reset</title>
+          </head>
+          <body style="font-family: Arial, sans-serif; padding: 24px;">
+            <h2>Invalid reset link</h2>
+            <p>Please request a new password reset link.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    const deepLinkBase = this.configService.get<string>(
+      'RESET_DEEP_LINK_URL',
+      'footsmart://reset-password',
+    );
+    const encodedToken = encodeURIComponent(token);
+    const appResetLink = `${deepLinkBase}?token=${encodedToken}`;
+
+    return res.status(HttpStatus.OK).type('html').send(`
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>FootSmart Password Reset</title>
+          <style>
+            body { font-family: Arial, sans-serif; background: #f9fafb; color: #111827; margin: 0; padding: 24px; }
+            .card { max-width: 560px; margin: 48px auto; background: #ffffff; border-radius: 12px; padding: 32px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+            .btn { display: inline-block; padding: 12px 20px; background: #10b981; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+            .link { word-break: break-all; color: #2563eb; }
+            .muted { color: #6b7280; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>Open FootSmart to reset your password</h2>
+            <p>We will open the FootSmart app to finish your password reset.</p>
+            <p><a class="btn" href="${appResetLink}">Open FootSmart App</a></p>
+            <p class="muted">If the app does not open, copy this link into your browser or try again:</p>
+            <p class="link">${appResetLink}</p>
+            <p class="muted">This link expires in 1 hour.</p>
+          </div>
+          <script>
+            setTimeout(function () {
+              window.location.href = "${appResetLink}";
+            }, 300);
+          </script>
+        </body>
+      </html>
+    `);
   }
 }

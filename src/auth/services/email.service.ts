@@ -54,16 +54,19 @@ export class EmailService {
   ): Promise<boolean> {
     try {
       const appName = this.configService.get<string>('APP_NAME', 'FootSmart');
-      const deepLink = this.configService.get<string>('RESET_REDIRECT_URL', 'footsmart://reset-password');
+      const deepLinkBase = this.configService.get<string>(
+        'RESET_DEEP_LINK_URL',
+        'footsmart://reset-password',
+      );
+      const webResetBase = this.configService.get<string>(
+        'RESET_WEB_URL',
+        'https://footsmart-backend-production.up.railway.app/api/auth/reset-password-link',
+      );
       const fromEmail = this.configService.get<string>('RESEND_FROM_EMAIL', 'onboarding@resend.dev');
-      
-      // Construct deep link for Flutter app
-      // Format: myapp://reset-password?token=abc123
-      const resetLink = `${deepLink}?token=${resetToken}`;
-      
-      // Alternative web link (if you have a landing page)
-      const webLink = this.configService.get<string>('WEB_RESET_URL');
-      const fallbackLink = webLink ? `${webLink}?token=${resetToken}` : resetLink;
+      const encodedToken = encodeURIComponent(resetToken);
+
+      const appResetLink = `${deepLinkBase}?token=${encodedToken}`;
+      const webResetLink = `${webResetBase}?token=${encodedToken}`;
 
       const { data, error } = await this.resend.emails.send({
         from: `${appName} <${fromEmail}>`,
@@ -71,13 +74,14 @@ export class EmailService {
         subject: `Reset Your ${appName} Password`,
         html: this.getPasswordResetEmailTemplate(
           userName || 'User',
-          resetLink,
-          fallbackLink,
+          webResetLink,
+          appResetLink,
           appName,
         ),
         text: this.getPasswordResetEmailText(
           userName || 'User',
-          resetLink,
+          webResetLink,
+          appResetLink,
           appName,
         ),
       });
@@ -99,8 +103,8 @@ export class EmailService {
    */
   private getPasswordResetEmailTemplate(
     userName: string,
-    resetLink: string,
-    fallbackLink: string,
+    webResetLink: string,
+    appResetLink: string,
     appName: string,
   ): string {
     return `
@@ -198,7 +202,7 @@ export class EmailService {
               <p>We received a request to reset your ${appName} password. Click the button below to choose a new password:</p>
               
               <div style="text-align: center;">
-                <a href="${resetLink}" class="button">Reset Password</a>
+                <a href="${webResetLink}" target="_blank" rel="noopener noreferrer" class="button">Reset Password</a>
               </div>
               
               <div class="info-box">
@@ -206,8 +210,13 @@ export class EmailService {
                 For your security, this password reset link is only valid for 60 minutes and can only be used once.
               </div>
               
-              <p>If the button doesn't work, copy and paste this link into your browser:</p>
-              <p style="word-break: break-all; color: #667eea; font-size: 14px;">${fallbackLink}</p>
+              <p>If the button does not open the app, copy and paste this link into your browser:</p>
+              <p style="word-break: break-all; font-size: 14px;">
+                <a href="${webResetLink}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none;">${webResetLink}</a>
+              </p>
+
+              <p>Already have the FootSmart app installed? You can also try this app link:</p>
+              <p style="word-break: break-all; color: #667eea; font-size: 14px;">${appResetLink}</p>
               
               <div class="security-note">
                 <strong>⚠️ Didn't request this?</strong><br>
@@ -232,7 +241,8 @@ export class EmailService {
    */
   private getPasswordResetEmailText(
     userName: string,
-    resetLink: string,
+    webResetLink: string,
+    appResetLink: string,
     appName: string,
   ): string {
     return `
@@ -241,7 +251,10 @@ Hi ${userName},
 We received a request to reset your ${appName} password.
 
 To reset your password, click the link below or paste it into your browser:
-${resetLink}
+${webResetLink}
+
+App link (if installed):
+${appResetLink}
 
 This link expires in 1 hour and can only be used once.
 
